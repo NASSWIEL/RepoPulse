@@ -1,0 +1,161 @@
+\documentclass[10pt,twocolumn]{article}
+\usepackage[margin=0.75in]{geometry}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{hyperref}
+
+\title{\textbf{Autoregressive Forecasting of GitHub Repository Activity:\\A Comparative Study of Neural and Baseline Methods}}
+\author{Big Data Project Report}
+\date{January 11, 2026}
+
+\begin{document}
+\maketitle
+
+\section{Introduction}
+
+Predicting GitHub repository activity is valuable for software project management, resource allocation, and understanding open-source ecosystem dynamics. This project develops an autoregressive forecasting pipeline to predict quarterly repository metrics and classify repositories as active or inactive. We compare deep learning models (LSTM, GRU) against simple baseline methods using real-world data from 500 GitHub repositories spanning multiple years.
+
+\section{Data Collection and Validation}
+
+\subsection{Data Source}
+The dataset comprises event-level records from 500 GitHub repositories stored in JSON Lines format. Each repository directory contains four files: \texttt{commits.json}, \texttt{issues.json}, \texttt{pull\_requests.json}, and \texttt{stars.json}. Timestamps vary by file type (\texttt{date} for commits, \texttt{starred\_at} for stars, \texttt{created\_at} for issues and PRs).
+
+\subsection{Data Structure Validation}
+Initial assumptions about data format (CSV, pre-aggregated) were incorrect. The actual structure required per-repository directory traversal with file-specific timestamp field mapping. Code was adapted to handle this structure, including error handling for malformed JSON and missing files.
+
+\section{Methodology}
+
+\subsection{Quarterly Aggregation}
+Event-level data was aggregated into quarterly time bins (Q1--Q4) spanning 1970--2026. Seven features were extracted:
+\begin{itemize}
+    \item \textbf{commit\_count}: Number of commits
+    \item \textbf{total\_contributors}: Unique contributor count
+    \item \textbf{issue\_count}: Issues opened
+    \item \textbf{issue\_closed}: Issues closed
+    \item \textbf{pr\_count}: Pull requests opened
+    \item \textbf{pr\_merged}: Pull requests merged
+    \item \textbf{star\_count}: Stars received
+\end{itemize}
+
+The aggregation produced 16,697 quarterly records across 500 repositories. Missing data (6.92\% for issues, 4.25\% for stars) was filled with zeros, representing quarters with no activity.
+
+\subsection{Activity Labeling}
+Binary activity labels were computed using a weighted activity score:
+\begin{equation}
+\begin{split}
+S = & \text{commits} \times 1.0 + \text{contributors} \times 2.0 \\
+    & + \text{issues} \times 0.5 + \text{closed} \times 1.0 \\
+    & + \text{PRs} \times 0.8 + \text{merged} \times 1.5 \\
+    & + \text{stars} \times 0.01
+\end{split}
+\end{equation}
+
+Weights reflect the relative importance of each metric (e.g., contributors weighted higher than commits). The 75th percentile threshold (766.27) was used to label quarters, yielding 21.7\% active quarters---a balanced distribution suitable for classification.
+
+\subsection{Time-Series Preparation}
+Data was transformed into sequences with a 4-quarter lookback window to predict 1 quarter ahead. The dataset was temporally split into train (70\%), development (15\%), and test (15\%) sets, yielding 3,593, 4,928, and 6,186 sequences respectively. Features were normalized using z-score standardization with floor values ($10^{-8}$) to prevent division by zero.
+
+\subsection{Model Architectures}
+
+\subsubsection{Baseline Models}
+\begin{itemize}
+    \item \textbf{Last Quarter}: Uses the most recent quarter's metrics as the prediction (persistence model).
+    \item \textbf{Moving Average}: Averages all four lookback quarters.
+\end{itemize}
+
+\subsubsection{Neural Models}
+\begin{itemize}
+    \item \textbf{LSTM}: 2-layer Long Short-Term Memory network with 32 hidden units per layer and 0.2 dropout.
+    \item \textbf{GRU}: 2-layer Gated Recurrent Unit with identical configuration.
+\end{itemize}
+
+Both neural models use batch-first processing and linear output layers mapping hidden states to 7-dimensional predictions.
+
+\subsection{Training Protocol}
+Neural models were trained with:
+\begin{itemize}
+    \item Loss: Mean Squared Error (MSE)
+    \item Optimizer: Adam (default learning rate)
+    \item Batch size: 64
+    \item Epochs: 30 with early stopping (patience=10)
+    \item Device: CPU
+\end{itemize}
+
+The LSTM achieved best development loss of 0.696 (epoch 27), while GRU reached 0.670 (epoch 27).
+
+\subsection{Autoregressive Evaluation}
+Models were evaluated using rolling autoregressive forecasting: predictions are denormalized, clipped to non-negative values (counts cannot be negative), and used to update the lookback window for subsequent predictions. This simulates real-world deployment where only historical data is available.
+
+Forecasts were converted to binary activity labels by computing activity scores (Equation 1) and applying the 75th percentile threshold. Both numeric regression metrics (RMSE, MAE) and classification metrics (Precision, Recall, F1, ROC-AUC, PR-AUC) were computed.
+
+\section{Results}
+
+\subsection{Numeric Forecasting Performance}
+Table~\ref{tab:numeric} shows regression metrics on 6,186 test samples. Moving Average achieved the lowest RMSE (848,127), while Last Quarter had the lowest MAE (88,929). Neural models showed comparable but slightly worse numeric performance.
+
+\begin{table}[h]
+\centering
+\caption{Numeric Forecasting Metrics (1-Quarter Ahead)}
+\label{tab:numeric}
+\begin{tabular}{lrr}
+\toprule
+\textbf{Model} & \textbf{RMSE} & \textbf{MAE} \\
+\midrule
+LSTM & 876,785 & 172,153 \\
+GRU & 876,682 & 172,051 \\
+Last Quarter & 895,669 & \textbf{88,929} \\
+Moving Average & \textbf{848,127} & 112,821 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Activity Classification Performance}
+Classification results (Table~\ref{tab:classification}) reveal a striking difference: baseline models vastly outperform neural networks. Last Quarter achieved F1-score of 0.9976 and ROC-AUC of 0.9637, while LSTM achieved only 0.6711 and 0.4568 respectively.
+
+\begin{table}[h]
+\centering
+\caption{Activity Classification Metrics}
+\label{tab:classification}
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Model} & \textbf{F1} & \textbf{Recall} & \textbf{ROC-AUC} \\
+\midrule
+LSTM & 0.6711 & 0.5067 & 0.4568 \\
+GRU & 0.6892 & 0.5275 & 0.4843 \\
+Last Quarter & \textbf{0.9976} & \textbf{0.9980} & \textbf{0.9637} \\
+Moving Avg. & 0.9981 & 0.9997 & 0.9541 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Analysis of Results}
+The superior performance of baseline methods reveals strong temporal persistence in repository activity: active repositories tend to remain active, and inactive ones stay inactive. This autocorrelation is effectively captured by the Last Quarter model.
+
+Neural models struggled because:
+\begin{enumerate}
+    \item \textbf{Limited training data}: Only 3,593 training sequences may be insufficient for deep learning.
+    \item \textbf{High variance}: Repository activity exhibits extreme variability (max values 100$\times$ larger than means), making learning difficult despite normalization.
+    \item \textbf{Class imbalance effects}: With 21.7\% active quarters, neural models may under-predict the minority class.
+    \item \textbf{Feature correlations}: Simple linear relationships captured by baselines may be more robust than learned non-linear patterns.
+\end{enumerate}
+
+The ROC-AUC scores near 0.5 for neural models suggest near-random classification performance, while baselines approach perfect discrimination.
+
+\section{Conclusion}
+
+This project successfully implemented an end-to-end autoregressive forecasting pipeline for GitHub repository activity prediction. Key accomplishments include:
+
+\begin{itemize}
+    \item Validated and preprocessed real-world GitHub data (500 repos, 16,697 quarterly records)
+    \item Designed a weighted activity scoring system with data-driven threshold selection
+    \item Implemented and trained LSTM/GRU models alongside baseline methods
+    \item Evaluated using autoregressive forecasting with both regression and classification metrics
+\end{itemize}
+
+The surprising result is that simple baseline models (Last Quarter, Moving Average) dramatically outperform neural networks for activity classification (F1: 0.998 vs. 0.67--0.69), suggesting that GitHub repository activity is highly autocorrelated. For practical deployment, the Last Quarter persistence model offers superior performance with minimal computational cost.
+
+\subsection{Future Work}
+Potential improvements include: (1) incorporating repository metadata (language, topic, size); (2) multi-step forecasting horizons beyond 1 quarter; (3) hierarchical models accounting for repository-specific patterns; (4) ensemble methods combining baseline and neural approaches; (5) addressing class imbalance through resampling or focal loss; and (6) larger datasets or transfer learning from related domains.
+
+\end{document}

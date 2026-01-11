@@ -1,0 +1,116 @@
+# Configuration for GitHub Repository Activity Forecasting Pipeline
+
+# Data Paths
+data:
+  raw_data_path: "/info/raid-etu/m2/s2308975/big_data"
+  aggregated_data_path: "/info/raid-etu/m2/s2405959/BigData/data/processed/quarterly_aggregated.parquet"
+  labeled_data_path: "/info/raid-etu/m2/s2405959/BigData/data/processed/quarterly_labeled.parquet"
+  processed_path: "data/processed"
+  output_path: "/info/raid-etu/m2/s2405959/BigData/data/processed"
+
+# Preprocessing
+preprocessing:
+  sequence_length: 4  # Number of past quarters to use
+  imputation_strategy: "zero"  # zero, forward_fill, interpolate
+  min_quarters: 2  # Minimum quarters required per repository
+  date_range:
+    start: null  # YYYY-MM-DD or null for all data
+    end: null
+
+# Activity Labeling
+labeling:
+  threshold_method: "f1"  # f1, youden, precision, recall
+  validation_split: 0.2
+  weights:
+    commits: 1.0
+    pull_requests: 2.0
+    issues: 0.5
+    stars: 0.1
+    forks: 0.3
+
+# Forecasting Models
+forecasting:
+  models:
+    naive:
+      enabled: true
+    
+    moving_average:
+      enabled: true
+      window_size: 3
+    
+    lstm:
+      enabled: true
+      hidden_size: 64
+      num_layers: 2
+      dropout: 0.2
+      learning_rate: 0.001
+      batch_size: 32
+      epochs: 50
+    
+    gru:
+      enabled: true
+      hidden_size: 64
+      num_layers: 2
+      dropout: 0.2
+      learning_rate: 0.001
+      batch_size: 32
+      epochs: 50
+
+# Classification
+classification:
+  model: "logistic"  # logistic, rf, gbm
+  test_size: 0.2
+  random_forest:
+    n_estimators: 100
+    max_depth: 10
+  gradient_boosting:
+    n_estimators: 100
+    learning_rate: 0.1
+
+# Evaluation
+evaluation:
+  metrics:
+    - mse
+    - mae
+    - rmse
+    - precision
+    - recall
+    - f1
+    - roc_auc
+    - pr_auc
+  
+  rolling_windows:
+    - train_start: "2015-01-01"
+      train_end: "2018-06-30"
+      test_start: "2018-07-01"
+      test_end: "2018-09-30"
+    - train_start: "2015-01-01"
+      train_end: "2018-09-30"
+      test_start: "2018-10-01"
+      test_end: "2018-12-31"
+
+# Training
+training:
+  random_seed: 42
+  device: "auto"  # auto, cuda, cpu
+  early_stopping:
+    enabled: true
+    patience: 10
+    min_delta: 0.001
+  
+  checkpoint:
+    save_best_only: true
+    save_frequency: 10  # epochs
+
+# Logging
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  file: "logs/pipeline.log"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+# Output
+output:
+  export_csv: true
+  save_plots: true
+  save_metrics: true
+  plot_format: "png"  # png, pdf, svg

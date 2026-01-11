@@ -1,0 +1,17 @@
+ACTIVITY LABELING SUMMARY
+======================================================================
+
+Total quarters: 16697
+Active quarters: 3617 (21.7%)
+Inactive quarters: 13080 (78.3%)
+
+Threshold: 766.27 (75th percentile)
+
+Feature weights:
+  commit_count             :  1.00
+  total_contributors       :  2.00
+  issue_count              :  0.50
+  issue_closed             :  1.00
+  pr_count                 :  0.80
+  pr_merged                :  1.50
+  star_count               :  0.01
