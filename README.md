@@ -207,17 +207,6 @@ python models/evaluate_forecasters.py --model last  # baseline
 python models/evaluate_forecasters.py --model avg   # baseline
 ```
 
-### Quick Start with MLflow
-
-```bash
-# Example: Train multiple LSTM variants and compare in MLflow
-for hidden in 32 64 128; do
-    python models/train_forecasters.py --model lstm --hidden_size $hidden --epochs 50
-done
-
-# View all runs and compare performance
-mlflow ui --backend-store-uri mlruns
-```
 
 
 ## Project Structure
