@@ -108,6 +108,34 @@ logging:
   file: "logs/pipeline.log"
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
+# MLflow Configuration - Experiment Tracking & Model Registry
+mlflow:
+  tracking_uri: "mlruns"  # Local directory for MLflow tracking
+  experiment_name: "github-activity-forecasting"  # Main experiment name
+  artifact_location: "mlruns/artifacts"  # Where to store model artifacts
+  
+  # Experiments for different model types
+  experiments:
+    forecasting: "forecasting-models"
+    classification: "activity-classification"
+    preprocessing: "data-preprocessing"
+  
+  # Model registry
+  registry:
+    enabled: true
+    production_stage: "Production"
+    staging_stage: "Staging"
+  
+  # Logging configuration
+  log_system_metrics: true  # Log CPU, GPU, memory usage
+  log_every_n_epoch: 1  # Log metrics every N epochs
+  
+  # Tags to track
+  default_tags:
+    project: "BigData-GitHub-Activity"
+    team: "M2-DataScience"
+    framework: "PyTorch"
+
 # Output
 output:
   export_csv: true

@@ -92,14 +92,118 @@ The focus is on classification performance since that's the practical use case.
 ## Installation
 
 ```bash
-pip install torch pandas numpy scikit-learn pyyaml
+# Install dependencies
+pip install torch pandas numpy scikit-learn pyyaml mlflow
+
+# Or use requirements.txt
+pip install -r requirements.txt
 ```
 
 Requires Python 3.9+.
 
+## MLflow Integration - Experiment Tracking & Model Registry
+
+This project uses **MLflow** for comprehensive experiment tracking and model management, following MLOps best practices.
+
+### Why MLflow?
+
+**MLflow provides:**
+- 📊 **Experiment Tracking**: Automatic logging of all hyperparameters and metrics
+- 📈 **Performance Comparison**: Visual and programmatic model comparison
+- 🎯 **Model Registry**: Centralized model versioning and stage management  
+- 🔄 **Reproducibility**: Complete tracking of training runs for reproducibility
+- 🚀 **Deployment Ready**: Model signatures for production deployment
+
+### MLflow Components Used
+
+1. **Experiment Tracking**
+   - All training runs are logged to separate experiments (forecasting vs classification)
+   - Hyperparameters, metrics, and system info tracked automatically
+   - Training curves logged at each epoch
+
+2. **Model Artifacts**
+   - Models saved with input/output signatures
+   - Training history and checkpoints logged as artifacts
+   - Confusion matrices and plots preserved
+
+3. **Model Registry**
+   - Best models automatically registered
+   - Version control for model iterations
+   - Stage management (Staging, Production, Archived)
+
+### Viewing Results
+
+```bash
+# Start MLflow UI (from project root)
+mlflow ui --backend-store-uri mlruns
+
+# Access at http://localhost:5000
+```
+
+The UI provides:
+- Interactive experiment comparison
+- Metric visualization over time
+- Parameter correlation analysis
+- Model artifact browser
+
+### Training with MLflow
+
+```bash
+# Train with MLflow tracking (default)
+python models/train_forecasters.py --model lstm --epochs 50 --hidden_size 64
+
+# Train without MLflow
+python models/train_forecasters.py --model lstm --no_mlflow
+
+# Train classifier with tracking
+python models/train_classifier.py --model logistic
+```
+
+### Programmatic Access
+
+See [notebooks/mlflow_demo.ipynb](notebooks/mlflow_demo.ipynb) for examples of:
+- Querying experiments and comparing runs
+- Loading models from registry
+- Extracting best hyperparameters
+- Generating comparison visualizations
+- Exporting results for reports
+
+### MLflow Configuration
+
+Configuration is in [config/config.yaml](config/config.yaml):
+
+```yaml
+mlflow:
+  tracking_uri: "mlruns"                         # Local tracking directory
+  experiment_name: "github-activity-forecasting"  # Main experiment
+  
+  experiments:
+    forecasting: "forecasting-models"             # LSTM/GRU experiments
+    classification: "activity-classification"      # Classifier experiments
+  
+  registry:
+    enabled: true                                  # Enable model registry
+```
+
+### For Presentation
+
+**Key points to highlight:**
+1. Every training run is tracked with complete hyperparameters
+2. Easy comparison of 10+ model configurations
+3. Best model automatically identified and registered
+4. Complete reproducibility - can recreate any result
+5. Production-ready with model signatures and versioning
+
+**Demo Flow:**
+1. Show MLflow UI with multiple runs
+2. Compare metrics across models (LSTM vs GRU)
+3. View training curves and convergence
+4. Load best model from registry
+5. Explain how this supports MLOps workflow
+
 ## Usage
 
-Run the full pipeline:
+Run the full pipeline with MLflow tracking:
 
 ```bash
 # 1. Aggregate raw event logs into quarterly metrics
@@ -111,38 +215,85 @@ python preprocessing/label_activity.py
 # 3. Generate time-series sequences
 python models/prepare_timeseries_data.py --lookback 4 --horizon 1
 
-# 4. Train neural models
-python models/train_forecasters.py --model lstm --epochs 30 --batch_size 64
-python models/train_forecasters.py --model gru --epochs 30 --batch_size 64
+# 4. Train neural models (with MLflow tracking)
+python models/train_forecasters.py --model lstm --epochs 50 --hidden_size 64
+python models/train_forecasters.py --model gru --epochs 50 --hidden_size 32
 
-# 5. Evaluate all models
-python models/evaluate_forecasters.py --model lstm --hidden_size 32 --num_layers 2
-python models/evaluate_forecasters.py --model gru --hidden_size 32 --num_layers 2
-python models/evaluate_forecasters.py --model last
-python models/evaluate_forecasters.py --model avg
+# 5. Train classifier (with MLflow tracking)
+python models/train_classifier.py --model logistic
+python models/train_classifier.py --model rf
+
+# 6. View results in MLflow UI
+mlflow ui --backend-store-uri mlruns
+# Open http://localhost:5000
+
+# 7. Evaluate models
+python models/evaluate_forecasters.py --model lstm
+python models/evaluate_forecasters.py --model gru
+python models/evaluate_forecasters.py --model last  # baseline
+python models/evaluate_forecasters.py --model avg   # baseline
+```
+
+### Quick Start with MLflow
+
+```bash
+# Example: Train multiple LSTM variants and compare in MLflow
+for hidden in 32 64 128; do
+    python models/train_forecasters.py --model lstm --hidden_size $hidden --epochs 50
+done
+
+# View all runs and compare performance
+mlflow ui --backend-store-uri mlruns
 ```
 
 
 ## Project Structure
 
 ```
-├── config/config.yaml              # Configuration parameters
+├── config/config.yaml              # Configuration (includes MLflow settings)
 ├── preprocessing/
-│   ├── aggregate_quarters_enhanced.py
-│   ├── label_activity.py
+│   ├── aggregate_quarters_enhanced.py  # Quarterly aggregation
+│   ├── label_activity.py              # Activity labeling
 │   └── inspect_data.py
 ├── models/
-│   ├── prepare_timeseries_data.py
-│   ├── train_forecasters.py
+│   ├── mlflow_utils.py            # MLflow helper functions (NEW)
+│   ├── prepare_timeseries_data.py # Sequence generation
+│   ├── train_forecasters.py       # Training with MLflow tracking
+│   ├── train_classifier.py        # Classification with MLflow
 │   ├── evaluate_forecasters.py
 │   ├── forecaster.py              # Model definitions
 │   └── checkpoints/               # Saved models
+├── notebooks/
+│   ├── mlflow_demo.ipynb          # MLflow usage examples (NEW)
+│   ├── explore.ipynb              # Data exploration
+│   └── experiments.ipynb
 ├── data/
 │   ├── raw/                       # Input event logs (not included)
 │   └── processed/                 # Generated datasets
+├── mlruns/                        # MLflow tracking data (NEW)
+│   ├── experiments/
+│   ├── artifacts/
+│   └── models/
 ├── tests/                         # Unit tests
+├── requirements.txt               # Dependencies (includes mlflow)
 └── PROJECT_REPORT.tex             # Technical report
 ```
+
+## MLflow Artifacts Logged
+
+For each training run, MLflow captures:
+
+**Forecasting Models:**
+- Hyperparameters: model_type, hidden_size, num_layers, dropout, learning_rate, etc.
+- Metrics: train_loss, dev_loss, best_dev_loss (logged per epoch)
+- Artifacts: Model checkpoints, training history JSON, PyTorch model with signature
+- System: Training time, GPU/CPU usage, model parameter count
+
+**Classification Models:**
+- Hyperparameters: model_type, n_features, test_size, random_seed
+- Metrics: precision, recall, f1, accuracy, roc_auc, pr_auc, confusion_matrix
+- Artifacts: Trained model pickle, metrics JSON, sklearn model with signature
+- Dataset: Sample counts, class distribution, imbalance ratio
 
 ## License
 

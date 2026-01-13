@@ -46,6 +46,8 @@ data/processed/*.parquet
 data/processed/*.csv
 data/processed/timeseries/*.npz
 
+
+
 # Model artifacts - exclude trained models and checkpoints
 models/checkpoints/*.pt
 models/checkpoints/*.pth

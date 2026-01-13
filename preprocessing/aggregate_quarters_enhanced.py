@@ -29,6 +29,9 @@ STAR ACTIVITY:
   - star_count: Number of new stars received
   - star_users: Number of unique users who starred
 
+FORK ACTIVITY:
+  - fork_count: Cumulative fork count at quarter end
+
 DERIVED METRICS:
   - total_contributors: Union of commit authors, issue participants, PR contributors
   - engagement_score: Total comments across all activities
@@ -40,7 +43,8 @@ Data Structure:
     ├── commits.csv (author_date, author_login, comment_count)
     ├── stargazers.csv (starred_at, user_login)
     ├── issues.csv (created_at, closed_at, state, comments, user_login)
-    └── pull_requests.csv (created_at, merged_at, closed_at, state, comments, user_login)
+    ├── pull_requests.csv (created_at, merged_at, closed_at, state, comments, user_login)
+    └── repository.csv (forks_count, updated_at - cumulative metrics)
 
 Usage:
     python aggregate_quarters_enhanced.py --config config/config.yaml
@@ -153,9 +157,10 @@ class EnhancedQuarterlyAggregator:
         issues_data = self._process_issues(repo_dir)
         prs_data = self._process_pull_requests(repo_dir)
         stars_data = self._process_stargazers(repo_dir)
+        forks_data = self._process_repository_info(repo_dir)
         
         # Collect all DataFrames
-        dfs = [df for df in [commits_data, issues_data, prs_data, stars_data] if not df.empty]
+        dfs = [df for df in [commits_data, issues_data, prs_data, stars_data, forks_data] if not df.empty]
         
         if not dfs:
             return pd.DataFrame()
@@ -345,6 +350,42 @@ class EnhancedQuarterlyAggregator:
             logger.warning(f"Error processing stargazers in {repo_dir.name}: {e}")
             return pd.DataFrame()
     
+    def _process_repository_info(self, repo_dir: Path) -> pd.DataFrame:
+        """Extract cumulative fork count from repository snapshot."""
+        file_path = repo_dir / 'repository.csv'
+        if not file_path.exists():
+            return pd.DataFrame()
+        
+        try:
+            df = pd.read_csv(file_path)
+            
+            # The repository.csv contains a snapshot with forks_count and fetched_at
+            if 'forks_count' not in df.columns or 'fetched_at' not in df.columns:
+                return pd.DataFrame()
+            
+            # Convert timestamp
+            df['fetched_at'] = pd.to_datetime(df['fetched_at'], errors='coerce')
+            df = df.dropna(subset=['fetched_at'])
+            
+            if len(df) == 0:
+                return pd.DataFrame()
+            
+            # Extract time components
+            df['year'] = df['fetched_at'].dt.year
+            df['quarter'] = df['fetched_at'].dt.quarter
+            
+            # For each quarter, use the latest fork_count value
+            # (forks_count is cumulative, so we take the last snapshot per quarter)
+            quarterly = df.groupby(['year', 'quarter']).agg(
+                fork_count=('forks_count', 'last')
+            ).reset_index()
+            
+            return quarterly
+            
+        except Exception as e:
+            logger.warning(f"Error processing repository info in {repo_dir.name}: {e}")
+            return pd.DataFrame()
+    
     def _compute_derived_metrics(self, data: pd.DataFrame) -> pd.DataFrame:
         """Compute total_contributors and filter to keep only essential features."""
         
@@ -364,7 +405,7 @@ class EnhancedQuarterlyAggregator:
             'commit_count', 'total_contributors', 
             'issue_count', 'issue_closed',
             'pr_count', 'pr_merged', 
-            'star_count'
+            'star_count', 'fork_count'
         ]
         
         # Select only available essential features

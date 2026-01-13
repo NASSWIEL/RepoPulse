@@ -23,7 +23,8 @@ activity_score = (
     + issue_closed * 1.0         # Issue resolution (higher value)
     + pr_count * 0.8             # PR creation
     + pr_merged * 1.5            # PR acceptance (highest value)
-    + star_count * 0.01          # Popularity signal (scaled down)
+    + star_count * 0.2           # Popularity signal
+    + fork_count * 0.3           # Fork activity - strong interest indicator
 )
 
 Rationale:
@@ -33,8 +34,10 @@ Rationale:
   contributions (quality signal)
 - issue_closed: Higher weight (1.0) than issue_count (0.5) because resolution
   matters more than just opening issues
-- star_count: Low weight (0.01) because stars can spike rapidly without
-  actual development activity
+- star_count: Moderate weight (0.2) to better reflect popularity and
+  community interest as activity indicators
+- fork_count: Moderate-high weight (0.3) because forks indicate serious intent
+  to contribute or extend the project
 - commit_count: Base weight (1.0) as fundamental activity measure
 
 Threshold Selection:
@@ -77,7 +80,8 @@ class ActivityLabeler:
         'issue_closed': 1.0,        # Higher than issue_count - resolution matters
         'pr_count': 0.8,
         'pr_merged': 1.5,           # Highest weight - accepted contributions
-        'star_count': 0.01          # Low weight - popularity signal
+        'star_count': 0.2,          # Moderate weight - popularity and interest
+        'fork_count': 0.3           # Moderate-high weight - serious interest
     }
     
     def __init__(self, config_path: str = "config/config.yaml"):

@@ -28,6 +28,17 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 import yaml
 
+# MLflow for experiment tracking
+import mlflow
+import mlflow.pytorch
+from mlflow_utils import (
+    setup_mlflow_experiment,
+    log_params_from_config,
+    log_training_metrics,
+    log_pytorch_model,
+    log_dataset_info
+)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
@@ -206,10 +217,16 @@ def train_model(
     epochs: int = 50,
     lr: float = 0.001,
     device: str = 'cpu',
-    checkpoint_path: Path = None
+    checkpoint_path: Path = None,
+    log_to_mlflow: bool = True
 ) -> Dict:
     """
-    Train neural forecasting model.
+    Train neural forecasting model with MLflow tracking.
+    
+    MLflow Integration:
+    - Logs training and validation loss at each epoch
+    - Tracks best model performance
+    - Enables comparison across different runs
     
     Returns:
         Training history dict
@@ -262,6 +279,14 @@ def train_model(
         history['train_loss'].append(train_loss)
         history['dev_loss'].append(dev_loss)
         
+        # Log metrics to MLflow
+        if log_to_mlflow:
+            log_training_metrics({
+                'train_loss': train_loss,
+                'dev_loss': dev_loss,
+                'best_dev_loss': best_dev_loss
+            }, step=epoch)
+        
         logger.info(f"Epoch {epoch+1}/{epochs} - Train Loss: {train_loss:.6f}, Dev Loss: {dev_loss:.6f}")
         
         # Early stopping
@@ -286,7 +311,16 @@ def train_model(
 
 
 def main():
-    """Main training script."""
+    """
+    Main training script with comprehensive MLflow integration.
+    
+    MLflow captures:
+    1. All hyperparameters (model architecture, training config)
+    2. Training metrics at each epoch (train/dev loss)
+    3. Dataset information and statistics
+    4. Trained model artifacts with signature
+    5. Training plots and checkpoints
+    """
     parser = argparse.ArgumentParser(description="Train autoregressive forecasting models")
     parser.add_argument('--model', type=str, default='lstm', choices=['lstm', 'gru', 'baseline'])
     parser.add_argument('--baseline_type', type=str, default='last', choices=['last', 'moving_average'])
@@ -298,8 +332,14 @@ def main():
     parser.add_argument('--lr', type=float, default=0.001)
     parser.add_argument('--data_dir', type=str, default='data/processed/timeseries')
     parser.add_argument('--output_dir', type=str, default='models/checkpoints')
+    parser.add_argument('--config', type=str, default='config/config.yaml', help='Path to config file')
+    parser.add_argument('--no_mlflow', action='store_true', help='Disable MLflow tracking')
     
     args = parser.parse_args()
+    
+    # Load configuration
+    with open(args.config) as f:
+        config = yaml.safe_load(f)
     
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     data_dir = Path(args.data_dir)
@@ -323,65 +363,194 @@ def main():
         logger.info("No training required for baseline models")
         return
     
-    # Create datasets
-    logger.info("\nLoading data...")
-    train_dataset = TimeSeriesDataset(
-        data_dir / 'train.npz',
-        normalize=True,
-        stats_path=data_dir / 'feature_stats.json'
-    )
-    dev_dataset = TimeSeriesDataset(
-        data_dir / 'dev.npz',
-        normalize=True,
-        stats_path=data_dir / 'feature_stats.json'
-    )
-    
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
-    dev_loader = DataLoader(dev_dataset, batch_size=args.batch_size, shuffle=False)
-    
-    logger.info(f"Train samples: {len(train_dataset)}")
-    logger.info(f"Dev samples: {len(dev_dataset)}")
-    
-    # Create model
-    logger.info(f"\nInitializing {args.model.upper()} model...")
-    if args.model == 'lstm':
-        model = LSTMForecaster(
-            n_features=n_features,
-            hidden_size=args.hidden_size,
-            num_layers=args.num_layers,
-            dropout=args.dropout
+    # MLflow Experiment Setup
+    use_mlflow = not args.no_mlflow
+    if use_mlflow:
+        run_name = f"{args.model}-h{args.hidden_size}-l{args.num_layers}-e{args.epochs}"
+        
+        with setup_mlflow_experiment(
+            config=config,
+            experiment_type='forecasting',
+            run_name=run_name,
+            tags={'model_type': args.model, 'architecture': 'RNN'}
+        ) as run:
+            logger.info(f"\n📊 MLflow Run ID: {run.info.run_id}")
+            logger.info(f"📊 MLflow Experiment: {run.info.experiment_id}")
+            
+            # Log all hyperparameters
+            mlflow.log_params({
+                'model_type': args.model,
+                'hidden_size': args.hidden_size,
+                'num_layers': args.num_layers,
+                'dropout': args.dropout,
+                'epochs': args.epochs,
+                'batch_size': args.batch_size,
+                'learning_rate': args.lr,
+                'device': device,
+                'n_features': n_features,
+                'lookback': metadata['lookback'],
+                'random_seed': SEED
+            })
+            
+            # Create datasets
+            logger.info("\nLoading data...")
+            train_dataset = TimeSeriesDataset(
+                data_dir / 'train.npz',
+                normalize=True,
+                stats_path=data_dir / 'feature_stats.json'
+            )
+            dev_dataset = TimeSeriesDataset(
+                data_dir / 'dev.npz',
+                normalize=True,
+                stats_path=data_dir / 'feature_stats.json'
+            )
+            
+            train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
+            dev_loader = DataLoader(dev_dataset, batch_size=args.batch_size, shuffle=False)
+            
+            # Log dataset information
+            log_dataset_info(
+                dataset_path=str(data_dir / 'train.npz'),
+                dataset_type='train',
+                n_samples=len(train_dataset),
+                n_features=n_features,
+                additional_info={'lookback': metadata['lookback']}
+            )
+            log_dataset_info(
+                dataset_path=str(data_dir / 'dev.npz'),
+                dataset_type='dev',
+                n_samples=len(dev_dataset),
+                n_features=n_features
+            )
+            
+            logger.info(f"Train samples: {len(train_dataset)}")
+            logger.info(f"Dev samples: {len(dev_dataset)}")
+            
+            # Create model
+            logger.info(f"\nInitializing {args.model.upper()} model...")
+            if args.model == 'lstm':
+                model = LSTMForecaster(
+                    n_features=n_features,
+                    hidden_size=args.hidden_size,
+                    num_layers=args.num_layers,
+                    dropout=args.dropout
+                )
+            elif args.model == 'gru':
+                model = GRUForecaster(
+                    n_features=n_features,
+                    hidden_size=args.hidden_size,
+                    num_layers=args.num_layers,
+                    dropout=args.dropout
+                )
+            
+            n_params = sum(p.numel() for p in model.parameters())
+            mlflow.log_param('model_parameters', n_params)
+            logger.info(f"Model parameters: {n_params:,}")
+            
+            # Train
+            checkpoint_path = output_dir / f'{args.model}_best.pt'
+            start_time = time.time()
+            
+            history = train_model(
+                model=model,
+                train_loader=train_loader,
+                dev_loader=dev_loader,
+                epochs=args.epochs,
+                lr=args.lr,
+                device=device,
+                checkpoint_path=checkpoint_path,
+                log_to_mlflow=True
+            )
+            
+            training_time = time.time() - start_time
+            logger.info(f"\nTraining completed in {training_time/60:.2f} minutes")
+            
+            # Log final metrics and artifacts
+            mlflow.log_metric('training_time_minutes', training_time/60)
+            mlflow.log_metric('final_train_loss', history['train_loss'][-1])
+            mlflow.log_metric('final_dev_loss', history['dev_loss'][-1])
+            mlflow.log_metric('best_dev_loss', min(history['dev_loss']))
+            
+            # Save and log training history
+            history_path = output_dir / f'{args.model}_history.json'
+            with open(history_path, 'w') as f:
+                json.dump(history, f, indent=2)
+            mlflow.log_artifact(str(history_path), artifact_path='training_history')
+            
+            # Log model checkpoint
+            mlflow.log_artifact(str(checkpoint_path), artifact_path='checkpoints')
+            
+            # Log PyTorch model with signature
+            model.eval()
+            sample_input = train_dataset[0]['lookback'].unsqueeze(0).numpy()
+            sample_output = train_dataset[0]['target'].unsqueeze(0).numpy()
+            
+            log_pytorch_model(
+                model=model,
+                model_name=f"{args.model}_forecaster",
+                input_sample=sample_input,
+                output_sample=sample_output,
+                register_model=True,
+                registered_model_name=f"forecaster-{args.model}"
+            )
+            
+            logger.info(f"\n✅ MLflow tracking complete!")
+            logger.info(f"📊 View results: mlflow ui --backend-store-uri mlruns")
+            logger.info(f"🔗 Run ID: {run.info.run_id}")
+            
+    else:
+        # Original training without MLflow
+        logger.info("\nMLflow tracking disabled")
+        
+        # Create datasets
+        train_dataset = TimeSeriesDataset(
+            data_dir / 'train.npz',
+            normalize=True,
+            stats_path=data_dir / 'feature_stats.json'
         )
-    elif args.model == 'gru':
-        model = GRUForecaster(
-            n_features=n_features,
-            hidden_size=args.hidden_size,
-            num_layers=args.num_layers,
-            dropout=args.dropout
+        dev_dataset = TimeSeriesDataset(
+            data_dir / 'dev.npz',
+            normalize=True,
+            stats_path=data_dir / 'feature_stats.json'
         )
+        
+        train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
+        dev_loader = DataLoader(dev_dataset, batch_size=args.batch_size, shuffle=False)
+        
+        # Create model
+        if args.model == 'lstm':
+            model = LSTMForecaster(
+                n_features=n_features,
+                hidden_size=args.hidden_size,
+                num_layers=args.num_layers,
+                dropout=args.dropout
+            )
+        elif args.model == 'gru':
+            model = GRUForecaster(
+                n_features=n_features,
+                hidden_size=args.hidden_size,
+                num_layers=args.num_layers,
+                dropout=args.dropout
+            )
+        
+        # Train
+        checkpoint_path = output_dir / f'{args.model}_best.pt'
+        history = train_model(
+            model=model,
+            train_loader=train_loader,
+            dev_loader=dev_loader,
+            epochs=args.epochs,
+            lr=args.lr,
+            device=device,
+            checkpoint_path=checkpoint_path,
+            log_to_mlflow=False
+        )
+        
+        # Save history
+        with open(output_dir / f'{args.model}_history.json', 'w') as f:
+            json.dump(history, f, indent=2)
     
-    # Train
-    checkpoint_path = output_dir / f'{args.model}_best.pt'
-    start_time = time.time()
-    
-    history = train_model(
-        model=model,
-        train_loader=train_loader,
-        dev_loader=dev_loader,
-        epochs=args.epochs,
-        lr=args.lr,
-        device=device,
-        checkpoint_path=checkpoint_path
-    )
-    
-    training_time = time.time() - start_time
-    logger.info(f"\nTraining completed in {training_time/60:.2f} minutes")
-    
-    # Save history
-    with open(output_dir / f'{args.model}_history.json', 'w') as f:
-        json.dump(history, f, indent=2)
-    
-    logger.info(f"Saved training history")
-    logger.info(f"Best model checkpoint: {checkpoint_path}")
+    logger.info(f"\nTraining complete! Model saved to: {checkpoint_path}")
 
 
 if __name__ == "__main__":
