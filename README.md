@@ -19,11 +19,11 @@ The input consists of GitHub event logs organized by repository. Each repository
 - `pull_requests.json`: PR creation/merge events  
 - `stars.json`: Star timestamps
 
-We process these logs to extract temporal patterns rather than treating repositories as static snapshots. The dataset covers 500 repositories with historical data spanning multiple years.
+We process these logs to extract temporal patterns rather than treating repositories as static snapshots. The dataset covers 900 repositories with historical data spanning multiple years.
 
 ### Feature Extraction
 
-We aggregate events into calendar quarters (Q1-Q4) to balance temporal resolution with statistical stability. For each repository-quarter pair, we compute seven metrics:
+We aggregate events into calendar quarters (Q1-Q4) to balance temporal resolution with statistical stability. For each repository-quarter pair, we compute eight metrics:
 
 1. **commit_count**: Total commits in the quarter
 2. **total_contributors**: Unique authors contributing commits
@@ -32,8 +32,9 @@ We aggregate events into calendar quarters (Q1-Q4) to balance temporal resolutio
 5. **pr_count**: Pull requests opened
 6. **pr_merged**: Pull requests merged
 7. **star_count**: Stars received
+8. **fork_count**: Forks created
 
-These metrics capture different aspects of project health: development velocity (commits), community engagement (contributors), project management (issues), code quality (PR merges), and popularity (stars).
+These metrics capture different aspects of project health: development velocity (commits), community engagement (contributors), project management (issues), code quality (PR merges), popularity (stars), and project adoption (forks).
 
 ### Activity Labeling
 
@@ -46,10 +47,11 @@ activity_score = commit_count × 1.0
                + issue_closed × 1.0 
                + pr_count × 0.8 
                + pr_merged × 1.5 
-               + star_count × 0.01
+               + star_count × 0.2
+               + fork_count × 0.3
 ```
 
-The weights encode several assumptions: contributors indicate sustained community (weight 2.0), merged PRs represent quality contributions (1.5), while stars can be ephemeral (0.01). We compute the 75th percentile threshold across all quarters (766.27) and label quarters above this as "active" (1) and below as "inactive" (0). This yields a 21.7% active rate, creating moderate class imbalance.
+The weights encode several assumptions: contributors indicate sustained community (weight 2.0), merged PRs represent quality contributions (1.5), stars reflect popularity (0.2), and forks indicate active adoption and reuse (0.3). We compute the 75th percentile threshold across all quarters (1,319.5) and label quarters above this as "active" (1) and below as "inactive" (0). This yields a 22.4% active rate, creating moderate class imbalance.
 
 ### Preprocessing Pipeline
 
@@ -57,11 +59,11 @@ The preprocessing chain consists of three stages:
 
 1. **Aggregation** (`aggregate_quarters_enhanced.py`): Parse JSON logs, bin events by quarter, compute metrics. Missing data (repositories with no events in a quarter) are filled with zeros rather than excluded, preserving temporal continuity.
 
-2. **Labeling** (`label_activity.py`): Apply the activity scoring formula and threshold to generate binary labels. The output is a labeled dataset with 16,697 repository-quarter records.
+2. **Labeling** (`label_activity.py`): Apply the activity scoring formula and threshold to generate binary labels. The output is a labeled dataset with 31,638 repository-quarter records.
 
 3. **Sequence Generation** (`prepare_timeseries_data.py`): Convert the flat dataset into sequences suitable for time-series forecasting. Each training example consists of a 4-quarter lookback window (input) and a 1-quarter forecast horizon (target). We apply z-score normalization per feature using training set statistics, with a floor value (1e-8) on standard deviations to prevent numerical instability.
 
-The data is split temporally: 70% train, 15% validation, 15% test, yielding 3,593 / 4,928 / 6,186 sequences. Temporal splitting ensures models are evaluated on future data they haven't seen.
+The data is split temporally: 25% train, 34% validation, 41% test, yielding 7,004 / 9,541 / 11,502 sequences. Temporal splitting ensures models are evaluated on future data they haven't seen.
 
 ### Models
 
@@ -72,10 +74,10 @@ The data is split temporally: 70% train, 15% validation, 15% test, yielding 3,59
 These baselines require no training and provide a reality check on whether learned models add value.
 
 **Neural Models:**
-- **LSTM**: 2-layer network with 32 hidden units per layer, 0.2 dropout between layers
+- **LSTM**: 1-layer network with 16 hidden units, 0.3 dropout, optimized for dataset size
 - **GRU**: Identical architecture using GRU cells instead of LSTM
 
-Both models take sequences of shape (batch, 4, 7) and output predictions of shape (batch, 1, 7). They are trained with MSE loss on the continuous metrics, using the Adam optimizer with a learning rate of 0.001 and batch size of 64. Early stopping with patience of 10 epochs prevents overfitting.
+Both models take sequences of shape (batch, 4, 8) and output predictions of shape (batch, 1, 8). They are trained with MSE loss on the continuous metrics, using the Adam optimizer with a learning rate of 0.001 and batch size of 64. Early stopping with patience of 10 epochs prevents overfitting. Model capacity is carefully tuned to avoid overfitting given the 7,004 training samples.
 
 ### Evaluation Strategy
 
@@ -101,35 +103,6 @@ pip install -r requirements.txt
 
 Requires Python 3.9+.
 
-## MLflow Integration - Experiment Tracking & Model Registry
-
-This project uses **MLflow** for comprehensive experiment tracking and model management, following MLOps best practices.
-
-### Why MLflow?
-
-**MLflow provides:**
-- 📊 **Experiment Tracking**: Automatic logging of all hyperparameters and metrics
-- 📈 **Performance Comparison**: Visual and programmatic model comparison
-- 🎯 **Model Registry**: Centralized model versioning and stage management  
-- 🔄 **Reproducibility**: Complete tracking of training runs for reproducibility
-- 🚀 **Deployment Ready**: Model signatures for production deployment
-
-### MLflow Components Used
-
-1. **Experiment Tracking**
-   - All training runs are logged to separate experiments (forecasting vs classification)
-   - Hyperparameters, metrics, and system info tracked automatically
-   - Training curves logged at each epoch
-
-2. **Model Artifacts**
-   - Models saved with input/output signatures
-   - Training history and checkpoints logged as artifacts
-   - Confusion matrices and plots preserved
-
-3. **Model Registry**
-   - Best models automatically registered
-   - Version control for model iterations
-   - Stage management (Staging, Production, Archived)
 
 ### Viewing Results
 
