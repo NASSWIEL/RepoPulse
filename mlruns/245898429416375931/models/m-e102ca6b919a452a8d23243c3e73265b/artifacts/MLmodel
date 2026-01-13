@@ -1,0 +1,31 @@
+artifact_path: /info/raid-etu/m2/s2405959/BigData/mlruns/245898429416375931/models/m-e102ca6b919a452a8d23243c3e73265b/artifacts
+flavors:
+  python_function:
+    config:
+      device: null
+    data: data
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.pytorch
+    pickle_module_name: mlflow.pytorch.pickle_module
+    python_version: 3.10.18
+  pytorch:
+    code: null
+    model_data: data
+    pytorch_version: 2.5.1+cu118
+is_signature_from_type_hint: false
+mlflow_version: 3.7.0
+model_id: m-e102ca6b919a452a8d23243c3e73265b
+model_size_bytes: 216312
+model_uuid: m-e102ca6b919a452a8d23243c3e73265b
+prompts: null
+run_id: 5a2084d9ed0b411cad5383b6204d1ec1
+signature:
+  inputs: '[{"type": "tensor", "tensor-spec": {"dtype": "float32", "shape": [-1, 4,
+    7]}}]'
+  outputs: '[{"type": "tensor", "tensor-spec": {"dtype": "float32", "shape": [-1,
+    1, 7]}}]'
+  params: null
+type_hint_from_example: false
+utc_time_created: '2026-01-13 20:57:18.460406'

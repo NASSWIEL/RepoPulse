@@ -1,0 +1,15 @@
+creation_timestamp: 1768339004122
+current_stage: None
+deployment_job_state: null
+description: null
+last_updated_timestamp: 1768339004122
+model_id: m-e40503b67e984961b59e946bca0ae648
+name: forecaster-gru
+run_id: e5cf0e45b72a4005a0e31adde904eb5e
+run_link: null
+source: models:/m-e40503b67e984961b59e946bca0ae648
+status: READY
+status_message: null
+storage_location: /info/raid-etu/m2/s2405959/BigData/mlruns/245898429416375931/models/m-e40503b67e984961b59e946bca0ae648/artifacts
+user_id: null
+version: 2

@@ -108,14 +108,12 @@ class EnhancedQuarterlyAggregator:
         
         logger.info(f"Found {len(repo_dirs)} repositories")
         
-        # Process each repository
+        # Process each repository with incremental saving to avoid memory issues
         all_quarters = []
         errors = 0
+        batch_size = 100
         
         for i, repo_dir in enumerate(repo_dirs, 1):
-            if i % 100 == 0:
-                logger.info(f"Processed {i}/{len(repo_dirs)} repositories (errors: {errors})...")
-            
             try:
                 repo_data = self._process_repository(repo_dir)
                 if not repo_data.empty:
@@ -124,12 +122,31 @@ class EnhancedQuarterlyAggregator:
                 errors += 1
                 logger.error(f"Error processing {repo_dir.name}: {e}")
                 continue
+            
+            # Save intermediate results and clear memory every batch
+            if i % batch_size == 0:
+                logger.info(f"Processed {i}/{len(repo_dirs)} repositories (errors: {errors})...")
+                if all_quarters:
+                    # Concatenate batch and save incrementally
+                    batch_df = pd.concat(all_quarters, ignore_index=True)
+                    self._save_batch(batch_df, i // batch_size)
+                    all_quarters.clear()  # Free memory
+                    del batch_df
+                    import gc
+                    gc.collect()
         
-        # Combine all repositories
-        if not all_quarters:
-            raise ValueError("No data was aggregated from any repository")
+        # Process remaining repositories
+        if all_quarters:
+            batch_df = pd.concat(all_quarters, ignore_index=True)
+            self._save_batch(batch_df, (len(repo_dirs) // batch_size) + 1)
+            all_quarters.clear()
+            del batch_df
+            import gc
+            gc.collect()
         
-        aggregated = pd.concat(all_quarters, ignore_index=True)
+        # Combine all batch files
+        logger.info("Combining all batches...")
+        aggregated = self._combine_batches()
         logger.info(f"Aggregated {len(aggregated)} quarterly records from {len(repo_dirs)} repositories ({errors} errors)")
         
         # Compute derived metrics
@@ -413,6 +430,36 @@ class EnhancedQuarterlyAggregator:
         data = data[available_features]
         
         return data
+    
+    def _save_batch(self, batch_data: pd.DataFrame, batch_num: int) -> None:
+        """Save intermediate batch to avoid memory overflow."""
+        batch_dir = self.output_path.parent / "batches"
+        batch_dir.mkdir(parents=True, exist_ok=True)
+        batch_path = batch_dir / f"batch_{batch_num:03d}.parquet"
+        batch_data.to_parquet(batch_path, index=False)
+        logger.info(f"  Saved batch {batch_num} with {len(batch_data)} records to {batch_path}")
+    
+    def _combine_batches(self) -> pd.DataFrame:
+        """Combine all batch files into final dataset."""
+        batch_dir = self.output_path.parent / "batches"
+        if not batch_dir.exists():
+            raise ValueError("No batch files found")
+        
+        batch_files = sorted(batch_dir.glob("batch_*.parquet"))
+        logger.info(f"Found {len(batch_files)} batch files to combine")
+        
+        batches = []
+        for batch_file in batch_files:
+            batches.append(pd.read_parquet(batch_file))
+        
+        combined = pd.concat(batches, ignore_index=True)
+        
+        # Clean up batch files
+        import shutil
+        shutil.rmtree(batch_dir)
+        logger.info("Removed temporary batch files")
+        
+        return combined
     
     def _save_results(self, data: pd.DataFrame) -> None:
         """Save aggregated results with comprehensive metadata."""

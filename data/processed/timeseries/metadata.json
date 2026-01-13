@@ -1,7 +1,7 @@
 {
   "lookback": 4,
   "horizon": 1,
-  "n_features": 7,
+  "n_features": 8,
   "feature_names": [
     "commit_count",
     "total_contributors",
@@ -9,11 +9,11 @@
     "issue_closed",
     "pr_count",
     "pr_merged",
-    "star_count"
+    "star_count",
+    "fork_count"
   ],
-  "activity_threshold": 766.275,
-  "n_train": 3593,
-  "n_dev": 4928,
-  "n_test": 6186,
-  "n_repositories": 499
+  "n_train": 7004,
+  "n_dev": 9541,
+  "n_test": 11502,
+  "n_repositories": 900
 }

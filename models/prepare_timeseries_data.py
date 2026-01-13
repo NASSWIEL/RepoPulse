@@ -43,7 +43,8 @@ class TimeSeriesDataPreparator:
         'issue_closed',
         'pr_count',
         'pr_merged',
-        'star_count'
+        'star_count',
+        'fork_count'
     ]
     
     def __init__(

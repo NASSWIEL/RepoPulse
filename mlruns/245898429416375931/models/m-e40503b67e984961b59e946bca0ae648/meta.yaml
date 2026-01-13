@@ -1,0 +1,10 @@
+artifact_location: /info/raid-etu/m2/s2405959/BigData/mlruns/245898429416375931/models/m-e40503b67e984961b59e946bca0ae648/artifacts
+creation_timestamp: 1768338993942
+experiment_id: '245898429416375931'
+last_updated_timestamp: 1768339002855
+model_id: m-e40503b67e984961b59e946bca0ae648
+model_type: null
+name: gru_forecaster
+source_run_id: e5cf0e45b72a4005a0e31adde904eb5e
+status: 2
+status_message: null

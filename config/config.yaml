@@ -40,21 +40,21 @@ forecasting:
     
     lstm:
       enabled: true
-      hidden_size: 64
-      num_layers: 2
-      dropout: 0.2
+      hidden_size: 16  # Reduced from 64 to prevent overfitting (7K samples)
+      num_layers: 1    # Reduced from 2 to simplify model
+      dropout: 0.3     # Increased from 0.2 for regularization
       learning_rate: 0.001
-      batch_size: 32
-      epochs: 50
+      batch_size: 64   # Increased from 32 for better generalization
+      epochs: 100      # Increased with early stopping (patience=15)
     
     gru:
       enabled: true
-      hidden_size: 64
-      num_layers: 2
-      dropout: 0.2
+      hidden_size: 16  # Reduced from 64 to prevent overfitting
+      num_layers: 1    # Reduced from 2 to simplify model  
+      dropout: 0.3     # Increased from 0.2 for regularization
       learning_rate: 0.001
-      batch_size: 32
-      epochs: 50
+      batch_size: 64   # Increased from 32 for better generalization
+      epochs: 100      # Increased with early stopping (patience=15)
 
 # Classification
 classification:
