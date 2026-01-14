@@ -1,0 +1,10 @@
+artifact_location: /info/raid-etu/m2/s2405959/BigData/mlruns/245898429416375931/models/m-abcad723360d4d33828f10eeaed166e6/artifacts
+creation_timestamp: 1768382731699
+experiment_id: '245898429416375931'
+last_updated_timestamp: 1768382743223
+model_id: m-abcad723360d4d33828f10eeaed166e6
+model_type: null
+name: lstm_forecaster
+source_run_id: a96ed88139ce4640b30681c55b594e7c
+status: 2
+status_message: null

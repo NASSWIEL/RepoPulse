@@ -73,22 +73,49 @@ class TimeSeriesDataset(Dataset):
             mean = np.array(stats['mean'])
             std = np.array(stats['std'])
             
+            # Log normalization info
+            logger.info(f"Applying normalization with stats from {stats_path}")
+            if 'zero_variance_features' in stats and stats['zero_variance_features']:
+                logger.warning(f"Zero-variance features (scaling disabled): {stats['zero_variance_features']}")
+            
             # Additional guard against zero std (should already be handled in prep, but double-check)
             std = np.where(std < 1e-8, 1.0, std)
+            
+            # Check for NaN/Inf before normalization
+            if np.isnan(self.lookback_features).any():
+                raise ValueError(f"Lookback features contain {np.isnan(self.lookback_features).sum()} NaN values BEFORE normalization!")
+            if np.isnan(self.target_metrics).any():
+                raise ValueError(f"Target metrics contain {np.isnan(self.target_metrics).sum()} NaN values BEFORE normalization!")
             
             # Normalize lookback
             self.lookback_features = (self.lookback_features - mean) / std
             # Normalize targets
             self.target_metrics = (self.target_metrics - mean) / std
             
-            # Sanity check for NaNs after normalization
+            # Sanity check for NaN/Inf after normalization
             if np.isnan(self.lookback_features).any():
                 n_nans = np.isnan(self.lookback_features).sum()
+                logger.error(f"❌ Lookback features contain {n_nans} NaN values after normalization!")
+                logger.error(f"Mean: {mean}")
+                logger.error(f"Std: {std}")
                 raise ValueError(f"Lookback features contain {n_nans} NaN values after normalization!")
             
             if np.isnan(self.target_metrics).any():
                 n_nans = np.isnan(self.target_metrics).sum()
+                logger.error(f"❌ Target metrics contain {n_nans} NaN values after normalization!")
                 raise ValueError(f"Target metrics contain {n_nans} NaN values after normalization!")
+            
+            if np.isinf(self.lookback_features).any():
+                n_infs = np.isinf(self.lookback_features).sum()
+                logger.error(f"❌ Lookback features contain {n_infs} Inf values after normalization!")
+                raise ValueError(f"Lookback features contain {n_infs} Inf values after normalization!")
+            
+            if np.isinf(self.target_metrics).any():
+                n_infs = np.isinf(self.target_metrics).sum()
+                logger.error(f"❌ Target metrics contain {n_infs} Inf values after normalization!")
+                raise ValueError(f"Target metrics contain {n_infs} Inf values after normalization!")
+            
+            logger.info("✓ Data normalized successfully (no NaN/Inf)")
             
             self.mean = mean
             self.std = std
@@ -248,14 +275,41 @@ def train_model(
         model.train()
         train_losses = []
         
-        for batch in train_loader:
+        for batch_idx, batch in enumerate(train_loader):
             lookback = batch['lookback'].to(device)
             target = batch['target'].to(device)
             
+            # Check for NaN in batch data
+            if torch.isnan(lookback).any():
+                logger.error(f"❌ NaN detected in lookback at batch {batch_idx}")
+                raise ValueError(f"NaN in training batch {batch_idx}")
+            if torch.isnan(target).any():
+                logger.error(f"❌ NaN detected in target at batch {batch_idx}")
+                raise ValueError(f"NaN in training target {batch_idx}")
+            
             optimizer.zero_grad()
             prediction = model(lookback)
+            
+            # Check for NaN in prediction
+            if torch.isnan(prediction).any():
+                logger.error(f"❌ NaN in model prediction at epoch {epoch}, batch {batch_idx}")
+                logger.error(f"Lookback stats: min={lookback.min():.4f}, max={lookback.max():.4f}, mean={lookback.mean():.4f}")
+                raise ValueError(f"Model produced NaN predictions")
+            
             loss = criterion(prediction, target)
+            
+            # Check for NaN loss
+            if torch.isnan(loss):
+                logger.error(f"❌ NaN loss at epoch {epoch}, batch {batch_idx}")
+                logger.error(f"Prediction stats: min={prediction.min():.4f}, max={prediction.max():.4f}")
+                logger.error(f"Target stats: min={target.min():.4f}, max={target.max():.4f}")
+                raise ValueError(f"NaN loss detected")
+            
             loss.backward()
+            
+            # Gradient clipping to prevent exploding gradients
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+            
             optimizer.step()
             
             train_losses.append(loss.item())

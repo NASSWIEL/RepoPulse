@@ -12,8 +12,8 @@
     "star_count",
     "fork_count"
   ],
-  "n_train": 7004,
-  "n_dev": 9541,
-  "n_test": 11502,
+  "n_train": 16545,
+  "n_dev": 7645,
+  "n_test": 3857,
   "n_repositories": 900
 }

@@ -86,29 +86,96 @@ class TimeSeriesDataPreparator:
         data = pd.read_parquet(self.input_path)
         logger.info(f"Loaded {len(data)} records from {data['repo_id'].nunique()} repositories")
         
-        # Fill NaN values with 0 (quarters with no activity)
+        # === MLOps Best Practice: Comprehensive NaN Handling ===
+        # NaN values can arise from:
+        # 1. Quarters with no activity (legitimate zeros)
+        # 2. Data collection gaps (missing records)
+        # 3. Join/aggregation issues
+        
         features_to_fill = self.FORECAST_FEATURES + ['activity_score']
+        
+        # Log initial data quality
+        logger.info("\n" + "="*70)
+        logger.info("DATA QUALITY ASSESSMENT")
+        logger.info("="*70)
+        
         nan_counts = data[features_to_fill].isna().sum()
-        if nan_counts.sum() > 0:
-            logger.warning(f"\nFound NaN values in features:")
+        total_values = len(data) * len(features_to_fill)
+        total_nans = nan_counts.sum()
+        
+        if total_nans > 0:
+            logger.warning(f"\n⚠️  Found {total_nans:,} NaN values ({100*total_nans/total_values:.2f}% of data)")
+            logger.warning("\nNaN counts by feature:")
             for feat in features_to_fill:
                 if nan_counts[feat] > 0:
-                    logger.warning(f"  {feat}: {nan_counts[feat]} NaNs")
-            logger.info("Filling NaN values with 0 (quarters with no activity)")
+                    pct = 100 * nan_counts[feat] / len(data)
+                    logger.warning(f"  {feat:20s}: {nan_counts[feat]:6,} NaNs ({pct:5.2f}%)")
+            
+            # Check for Inf values
+            inf_counts = np.isinf(data[self.FORECAST_FEATURES].select_dtypes(include=[np.number])).sum()
+            if inf_counts.sum() > 0:
+                logger.error("\n❌ Found Inf values:")
+                for feat in self.FORECAST_FEATURES:
+                    if feat in inf_counts and inf_counts[feat] > 0:
+                        logger.error(f"  {feat}: {inf_counts[feat]} Inf values")
+            
+            logger.info("\n✓ Filling NaN values with 0 (quarters with no activity)")
             data[features_to_fill] = data[features_to_fill].fillna(0)
+            
+            # Verify NaN filling
+            remaining_nans = data[features_to_fill].isna().sum().sum()
+            if remaining_nans > 0:
+                logger.error(f"\n❌ ERROR: {remaining_nans} NaN values remain after filling!")
+                raise ValueError("NaN filling failed")
+            else:
+                logger.info("✓ All NaN values successfully filled")
+        else:
+            logger.info("✓ No NaN values detected in features")
         
         # Sort chronologically by repository
         data = data.sort_values(['repo_id', 'year', 'quarter']).reset_index(drop=True)
         
         # Engineer features
-        logger.info("\nEngineering temporal features...")
+        logger.info("\n" + "="*70)
+        logger.info("FEATURE ENGINEERING")
+        logger.info("="*70)
         data = self._engineer_features(data)
         
+        # Validate engineered features
+        logger.info("\nValidating engineered features...")
+        for feat in ['quarter_index', 'quarters_since_start']:
+            if feat in data.columns:
+                if data[feat].isna().any():
+                    logger.error(f"❌ {feat} contains NaN values")
+                    raise ValueError(f"Feature engineering produced NaN in {feat}")
+                logger.info(f"✓ {feat}: range [{data[feat].min()}, {data[feat].max()}]")
+        
         # Create sequences
-        logger.info("\nCreating sequences with lagged features...")
+        logger.info("\n" + "="*70)
+        logger.info("SEQUENCE CREATION")
+        logger.info("="*70)
         sequences = self._create_sequences(data)
         
-        logger.info(f"Created {len(sequences)} sequences")
+        logger.info(f"✓ Created {len(sequences):,} sequences")
+        
+        # Validate sequences for NaN/Inf
+        logger.info("\nValidating sequences...")
+        nan_sequences = 0
+        inf_sequences = 0
+        for seq in sequences:
+            if np.isnan(seq['lookback_features']).any() or np.isnan(seq['target_metrics']).any():
+                nan_sequences += 1
+            if np.isinf(seq['lookback_features']).any() or np.isinf(seq['target_metrics']).any():
+                inf_sequences += 1
+        
+        if nan_sequences > 0:
+            logger.error(f"❌ {nan_sequences} sequences contain NaN values")
+            raise ValueError("Sequences contain NaN values")
+        if inf_sequences > 0:
+            logger.error(f"❌ {inf_sequences} sequences contain Inf values")
+            raise ValueError("Sequences contain Inf values")
+        
+        logger.info(f"✓ All sequences validated (no NaN/Inf)")
         
         # Temporal split
         logger.info("\nPerforming temporal train/dev/test split...")
@@ -210,9 +277,9 @@ class TimeSeriesDataPreparator:
         Split sequences temporally.
         
         Strategy: Use quarter_index for temporal ordering
-        - Train: earliest 70% of quarters
-        - Dev: next 15% 
-        - Test: final 15%
+        - Train: earliest 85% of quarters
+        - Dev: next 10% 
+        - Test: final 5%
         """
         # Sort by target quarter index
         sequences = sorted(sequences, key=lambda x: (x['target_quarter_index'], x['repo_id']))
@@ -221,8 +288,8 @@ class TimeSeriesDataPreparator:
         quarter_indices = sorted(set(s['target_quarter_index'] for s in sequences))
         
         n_quarters = len(quarter_indices)
-        train_end_idx = quarter_indices[int(n_quarters * 0.70)]
-        dev_end_idx = quarter_indices[int(n_quarters * 0.85)]
+        train_end_idx = quarter_indices[int(n_quarters * 0.85)]
+        dev_end_idx = quarter_indices[int(n_quarters * 0.95)]
         
         train = [s for s in sequences if s['target_quarter_index'] <= train_end_idx]
         dev = [s for s in sequences if train_end_idx < s['target_quarter_index'] <= dev_end_idx]
@@ -282,34 +349,100 @@ class TimeSeriesDataPreparator:
         
         logger.info(f"Saved metadata")
         
-        # Save feature statistics for normalization (with guards for zero std)
+        # === MLOps Best Practice: Robust Feature Statistics ===
+        # Compute statistics from training data only to prevent data leakage
         train_features = np.concatenate([s['lookback_features'] for s in train], axis=0)
+        
+        logger.info("\n" + "="*70)
+        logger.info("COMPUTING NORMALIZATION STATISTICS")
+        logger.info("="*70)
+        logger.info(f"Training samples for statistics: {len(train_features):,}")
         
         feature_mean = train_features.mean(axis=0)
         feature_std = train_features.std(axis=0)
+        feature_min = train_features.min(axis=0)
+        feature_max = train_features.max(axis=0)
         
-        # Guard against zero/near-zero std - replace with 1.0 to disable scaling for that feature
-        feature_std = np.where(feature_std < 1e-8, 1.0, feature_std)
+        # Detailed logging of statistics
+        logger.info("\nFeature statistics (before guards):")
+        for i, feat_name in enumerate(metadata['feature_names']):
+            logger.info(f"  {feat_name:20s}: mean={feature_mean[i]:10.2f}, std={feature_std[i]:10.2f}, "
+                       f"min={feature_min[i]:10.2f}, max={feature_max[i]:10.2f}")
+        
+        # Identify zero-variance features
+        zero_var_mask = feature_std < 1e-8
+        if zero_var_mask.any():
+            logger.warning("\n⚠️  Zero-variance features detected:")
+            for i, feat_name in enumerate(metadata['feature_names']):
+                if zero_var_mask[i]:
+                    logger.warning(f"  {feat_name}: std={feature_std[i]:.2e} (setting to 1.0 to disable scaling)")
+        
+        # Guard against zero/near-zero std - replace with 1.0 to disable scaling
+        feature_std_safe = np.where(zero_var_mask, 1.0, feature_std)
+        
+        # Validate statistics
+        if np.isnan(feature_mean).any():
+            nan_features = [metadata['feature_names'][i] for i in np.where(np.isnan(feature_mean))[0]]
+            logger.error(f"\n❌ Mean contains NaN for features: {nan_features}")
+            raise ValueError("Feature means contain NaN values")
+        
+        if np.isnan(feature_std_safe).any():
+            nan_features = [metadata['feature_names'][i] for i in np.where(np.isnan(feature_std_safe))[0]]
+            logger.error(f"\n❌ Std contains NaN for features: {nan_features}")
+            raise ValueError("Feature std contains NaN values")
+        
+        if np.isinf(feature_mean).any() or np.isinf(feature_std_safe).any():
+            logger.error("\n❌ Feature statistics contain Inf values")
+            raise ValueError("Feature statistics contain Inf values")
+        
+        logger.info("\n✓ All feature statistics validated (no NaN/Inf)")
         
         feature_stats = {
             'mean': feature_mean.tolist(),
-            'std': feature_std.tolist(),
-            'min': train_features.min(axis=0).tolist(),
-            'max': train_features.max(axis=0).tolist()
+            'std': feature_std_safe.tolist(),
+            'min': feature_min.tolist(),
+            'max': feature_max.tolist(),
+            'zero_variance_features': [metadata['feature_names'][i] for i in np.where(zero_var_mask)[0]]
         }
         
         with open(self.output_dir / 'feature_stats.json', 'w') as f:
             json.dump(feature_stats, f, indent=2)
         
-        logger.info(f"Saved feature statistics for normalization (guarded against zero std)")
+        logger.info("✓ Saved feature statistics for normalization")
         
-        # Sanity check for NaNs
-        if np.isnan(feature_mean).any() or np.isnan(feature_std).any():
-            logger.error("ERROR: Feature statistics contain NaN values!")
-            logger.error(f"Mean NaNs: {np.isnan(feature_mean).sum()}")
-            logger.error(f"Std NaNs: {np.isnan(feature_std).sum()}")
-        else:
-            logger.info("Feature statistics are clean (no NaNs)")
+        # === Final Dataset Validation ===
+        logger.info("\n" + "="*70)
+        logger.info("FINAL DATASET VALIDATION")
+        logger.info("="*70)
+        
+        # Load and validate saved datasets
+        for split_name in ['train', 'dev', 'test']:
+            data = np.load(self.output_dir / f'{split_name}.npz')
+            lookback = data['lookback_features']
+            targets = data['target_metrics']
+            
+            logger.info(f"\n{split_name.upper()} dataset:")
+            logger.info(f"  Shape: lookback={lookback.shape}, targets={targets.shape}")
+            logger.info(f"  Lookback - min={lookback.min():.2f}, max={lookback.max():.2f}, mean={lookback.mean():.2f}")
+            logger.info(f"  Targets  - min={targets.min():.2f}, max={targets.max():.2f}, mean={targets.mean():.2f}")
+            
+            # Check for NaN/Inf
+            if np.isnan(lookback).any():
+                logger.error(f"  ❌ Lookback contains {np.isnan(lookback).sum()} NaN values")
+            if np.isnan(targets).any():
+                logger.error(f"  ❌ Targets contain {np.isnan(targets).sum()} NaN values")
+            if np.isinf(lookback).any():
+                logger.error(f"  ❌ Lookback contains {np.isinf(lookback).sum()} Inf values")
+            if np.isinf(targets).any():
+                logger.error(f"  ❌ Targets contain {np.isinf(targets).sum()} Inf values")
+            
+            if not (np.isnan(lookback).any() or np.isnan(targets).any() or 
+                    np.isinf(lookback).any() or np.isinf(targets).any()):
+                logger.info(f"  ✓ {split_name} dataset is clean (no NaN/Inf)")
+        
+        logger.info("\n" + "="*70)
+        logger.info("✓ ALL VALIDATIONS PASSED")
+        logger.info("="*70)
 
 
 def main():

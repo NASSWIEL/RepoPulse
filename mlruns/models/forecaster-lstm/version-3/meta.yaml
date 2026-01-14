@@ -1,0 +1,15 @@
+creation_timestamp: 1768382611098
+current_stage: None
+deployment_job_state: null
+description: null
+last_updated_timestamp: 1768382611098
+model_id: m-3a57f6563f35499d8598562325ffe8e8
+name: forecaster-lstm
+run_id: 8ebd876935d64ce9bb94b75b2efaae55
+run_link: null
+source: models:/m-3a57f6563f35499d8598562325ffe8e8
+status: READY
+status_message: null
+storage_location: /info/raid-etu/m2/s2405959/BigData/mlruns/245898429416375931/models/m-3a57f6563f35499d8598562325ffe8e8/artifacts
+user_id: null
+version: 3

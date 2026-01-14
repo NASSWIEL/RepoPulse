@@ -63,7 +63,7 @@ The preprocessing chain consists of three stages:
 
 3. **Sequence Generation** (`prepare_timeseries_data.py`): Convert the flat dataset into sequences suitable for time-series forecasting. Each training example consists of a 4-quarter lookback window (input) and a 1-quarter forecast horizon (target). We apply z-score normalization per feature using training set statistics, with a floor value (1e-8) on standard deviations to prevent numerical instability.
 
-The data is split temporally: 25% train, 34% validation, 41% test, yielding 7,004 / 9,541 / 11,502 sequences. Temporal splitting ensures models are evaluated on future data they haven't seen.
+The data is split temporally based on quarter indices: **85% train, 10% dev (validation), 5% test**. This temporal splitting ensures models are evaluated on future data they haven't seen, simulating real-world deployment where predictions must be made for upcoming quarters.
 
 ### Models
 
