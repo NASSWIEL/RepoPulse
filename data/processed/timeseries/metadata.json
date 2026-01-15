@@ -1,5 +1,8 @@
 {
-  "lookback": 4,
+  "lookback": 108,
+  "min_lookback": 2,
+  "max_lookback": null,
+  "expanding_window": true,
   "horizon": 1,
   "n_features": 8,
   "feature_names": [
@@ -12,8 +15,8 @@
     "star_count",
     "fork_count"
   ],
-  "n_train": 16545,
-  "n_dev": 7645,
-  "n_test": 3857,
+  "n_train": 17269,
+  "n_dev": 8649,
+  "n_test": 3922,
   "n_repositories": 900
 }

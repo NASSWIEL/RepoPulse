@@ -28,6 +28,9 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 import yaml
 
+# Import forecasters
+from forecaster import TCNForecaster
+
 # MLflow for experiment tracking
 import mlflow
 import mlflow.pytorch
@@ -410,11 +413,18 @@ def main():
     5. Training plots and checkpoints
     """
     parser = argparse.ArgumentParser(description="Train autoregressive forecasting models")
-    parser.add_argument('--model', type=str, default='lstm', choices=['lstm', 'gru', 'baseline'])
+    parser.add_argument('--model', type=str, default='lstm', choices=['lstm', 'gru', 'tcn', 'baseline'])
     parser.add_argument('--baseline_type', type=str, default='last', choices=['last', 'moving_average'])
     parser.add_argument('--hidden_size', type=int, default=64)
     parser.add_argument('--num_layers', type=int, default=2)
     parser.add_argument('--dropout', type=float, default=0.2)
+    
+    # TCN-specific arguments
+    parser.add_argument('--num_channels', type=int, nargs='+', default=[32, 32, 32], 
+                       help='List of channel sizes for each TCN level')
+    parser.add_argument('--kernel_size', type=int, default=3, 
+                       help='Kernel size for temporal convolutions')
+    
     parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--batch_size', type=int, default=64)
     parser.add_argument('--lr', type=float, default=0.001)
@@ -613,6 +623,9 @@ def main():
                 num_layers=args.num_layers,
                 dropout=args.dropout
             )
+            n_params = sum(p.numel() for p in model.parameters())
+            logger.info(f"Model parameters: {n_params:,}")
+            
         elif args.model == 'gru':
             model = GRUForecaster(
                 n_features=n_features,
@@ -620,6 +633,66 @@ def main():
                 num_layers=args.num_layers,
                 dropout=args.dropout
             )
+            n_params = sum(p.numel() for p in model.parameters())
+            logger.info(f"Model parameters: {n_params:,}")
+            
+        elif args.model == 'tcn':
+            # Use TCNForecaster from forecaster.py (sklearn-like API)
+            # Train using its fit() method instead of our training loop
+            logger.info(f"Training TCN model with channels={args.num_channels}")
+            
+            # Load data as numpy arrays
+            train_data = np.load(data_dir / 'train.npz')
+            dev_data = np.load(data_dir / 'dev.npz')
+            
+            X_train = train_data['lookback_features']
+            y_train = train_data['target_metrics']
+            X_dev = dev_data['lookback_features']
+            y_dev = dev_data['target_metrics']
+            
+            seq_lengths_train = train_data.get('sequence_lengths', None)
+            
+            # Create and train TCN
+            tcn = TCNForecaster(
+                input_size=n_features,
+                num_channels=args.num_channels,
+                kernel_size=args.kernel_size,
+                dropout=args.dropout,
+                learning_rate=args.lr,
+                epochs=args.epochs,
+                batch_size=args.batch_size,
+                patience=15,
+                device=device
+            )
+            
+            start_time = time.time()
+            tcn.fit(X_train, y_train, sequence_lengths=seq_lengths_train)
+            training_time = time.time() - start_time
+            
+            # Save model
+            torch.save({
+                'model_state_dict': tcn.model.state_dict(),
+                'scaler_X_mean': tcn.scaler_X.mean_,
+                'scaler_X_scale': tcn.scaler_X.scale_,
+                'scaler_y_mean': tcn.scaler_y.mean_,
+                'scaler_y_scale': tcn.scaler_y.scale_,
+                'config': {
+                    'input_size': n_features,
+                    'num_channels': args.num_channels,
+                    'kernel_size': args.kernel_size,
+                    'dropout': args.dropout
+                }
+            }, checkpoint_path)
+            
+            history = tcn.history
+            logger.info(f"TCN training completed in {training_time:.1f}s")
+            logger.info(f"Best val loss: {min(history['val_loss']):.4f}")
+            
+            # Save history and exit (TCN uses different training approach)
+            with open(output_dir / f'{args.model}_history.json', 'w') as f:
+                json.dump(history, f, indent=2)
+            
+            return
         
         # Train
         checkpoint_path = output_dir / f'{args.model}_best.pt'

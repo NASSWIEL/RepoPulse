@@ -58,6 +58,15 @@ forecasting:
       learning_rate: 0.001
       batch_size: 64   # Increased from 32 for better generalization
       epochs: 100      # Increased with early stopping (patience=15)
+    
+    tcn:
+      enabled: true
+      num_channels: [32, 32, 32]  # 3 levels of temporal convolutions
+      kernel_size: 3               # Kernel size for convolutions
+      dropout: 0.2                 # Dropout for regularization
+      learning_rate: 0.001
+      batch_size: 64
+      epochs: 100
 
 # Classification
 classification:

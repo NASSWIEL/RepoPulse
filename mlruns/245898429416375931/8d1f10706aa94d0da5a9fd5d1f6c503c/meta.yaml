@@ -1,0 +1,14 @@
+artifact_uri: /info/raid-etu/m2/s2405959/BigData/mlruns/245898429416375931/8d1f10706aa94d0da5a9fd5d1f6c503c/artifacts
+end_time: 1768492090003
+entry_point_name: ''
+experiment_id: '245898429416375931'
+lifecycle_stage: active
+run_id: 8d1f10706aa94d0da5a9fd5d1f6c503c
+run_name: lstm-h16-l1-e100
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1768492035537
+status: 4
+tags: []
+user_id: s2405959
