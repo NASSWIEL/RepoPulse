@@ -28,29 +28,37 @@ logger = logging.getLogger(__name__)
 
 
 class TimeSeriesDataset(Dataset):
-    """PyTorch Dataset for time series forecasting."""
+    """PyTorch Dataset for time series forecasting with variable-length support."""
     
     def __init__(
         self,
         sequences: np.ndarray,
         targets: np.ndarray,
-        sequence_length: int
+        sequence_length: int,
+        sequence_lengths: Optional[np.ndarray] = None
     ):
         """
         Args:
             sequences: Historical sequences (n_samples, sequence_length, n_features)
             targets: Target values (n_samples, n_features)
-            sequence_length: Length of input sequences
+            sequence_length: Maximum length of input sequences (for padding)
+            sequence_lengths: Actual lengths of sequences before padding (optional)
         """
         self.sequences = torch.FloatTensor(sequences)
         self.targets = torch.FloatTensor(targets)
         self.sequence_length = sequence_length
+        
+        if sequence_lengths is not None:
+            self.sequence_lengths = torch.LongTensor(sequence_lengths)
+        else:
+            # All sequences have full length
+            self.sequence_lengths = torch.LongTensor([sequence_length] * len(sequences))
     
     def __len__(self) -> int:
         return len(self.sequences)
     
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        return self.sequences[idx], self.targets[idx]
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        return self.sequences[idx], self.targets[idx], self.sequence_lengths[idx]
 
 
 class BaseForecaster(ABC):
@@ -232,13 +240,14 @@ class LSTMForecaster(BaseForecaster):
         # Add output layer separately since LSTM returns tuple
         self.output_layer = nn.Linear(self.hidden_size, self.input_size).to(self.device)
     
-    def fit(self, X: np.ndarray, y: np.ndarray) -> 'LSTMForecaster':
+    def fit(self, X: np.ndarray, y: np.ndarray, sequence_lengths: Optional[np.ndarray] = None) -> 'LSTMForecaster':
         """
         Train the LSTM model.
         
         Args:
             X: Input sequences (n_samples, sequence_length, n_features)
             y: Target values (n_samples, n_features)
+            sequence_lengths: Actual lengths of sequences (for padded input)
             
         Returns:
             Self
@@ -252,7 +261,7 @@ class LSTMForecaster(BaseForecaster):
         y_scaled = self.scaler_y.fit_transform(y)
         
         # Create dataset and dataloader
-        dataset = TimeSeriesDataset(X_scaled, y_scaled, seq_len)
+        dataset = TimeSeriesDataset(X_scaled, y_scaled, seq_len, sequence_lengths)
         dataloader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
         
         # Loss and optimizer
@@ -267,14 +276,33 @@ class LSTMForecaster(BaseForecaster):
         for epoch in range(self.epochs):
             total_loss = 0.0
             
-            for batch_X, batch_y in dataloader:
+            for batch_X, batch_y, batch_lengths in dataloader:
                 batch_X = batch_X.to(self.device)
                 batch_y = batch_y.to(self.device)
+                batch_lengths = batch_lengths.cpu()
+                
+                # Pack padded sequence for efficient processing
+                # Sort by length (descending) for pack_padded_sequence
+                sorted_lengths, sort_idx = batch_lengths.sort(descending=True)
+                batch_X_sorted = batch_X[sort_idx]
+                batch_y_sorted = batch_y[sort_idx]
+                
+                # Pack sequences
+                packed_input = nn.utils.rnn.pack_padded_sequence(
+                    batch_X_sorted, sorted_lengths.tolist(), batch_first=True
+                )
                 
                 # Forward pass
-                lstm_out, (hidden, cell) = self.model[0](batch_X)
-                # Use last hidden state
-                predictions = self.output_layer(lstm_out[:, -1, :])
+                packed_output, (hidden, cell) = self.model[0](packed_input)
+                
+                # Use last hidden state (which corresponds to actual last timestep)
+                # For LSTM with batch_first, hidden shape is [num_layers, batch, hidden_size]
+                last_hidden = hidden[-1]  # Take last layer
+                predictions = self.output_layer(last_hidden)
+                
+                # Unsort predictions to match original batch order
+                unsort_idx = sort_idx.argsort()
+                predictions = predictions[unsort_idx]
                 
                 # Compute loss
                 loss = criterion(predictions, batch_y)
@@ -295,12 +323,13 @@ class LSTMForecaster(BaseForecaster):
         logger.info("LSTM training complete")
         return self
     
-    def predict(self, X: np.ndarray) -> np.ndarray:
+    def predict(self, X: np.ndarray, sequence_lengths: Optional[np.ndarray] = None) -> np.ndarray:
         """
         Make predictions.
         
         Args:
             X: Input sequences (n_samples, sequence_length, n_features)
+            sequence_lengths: Actual lengths of sequences (for padded input)
             
         Returns:
             Predictions (n_samples, n_features)
@@ -313,12 +342,32 @@ class LSTMForecaster(BaseForecaster):
         X_reshaped = X.reshape(-1, n_features)
         X_scaled = self.scaler_X.transform(X_reshaped).reshape(n_samples, seq_len, n_features)
         
+        # Default to full length if not provided
+        if sequence_lengths is None:
+            sequence_lengths = np.array([seq_len] * n_samples)
+        
         # Predict
         self.model.eval()
         with torch.no_grad():
             X_tensor = torch.FloatTensor(X_scaled).to(self.device)
-            lstm_out, _ = self.model[0](X_tensor)
-            predictions_scaled = self.output_layer(lstm_out[:, -1, :])
+            lengths_tensor = torch.LongTensor(sequence_lengths)
+            
+            # Sort by length for pack_padded_sequence
+            sorted_lengths, sort_idx = lengths_tensor.sort(descending=True)
+            X_sorted = X_tensor[sort_idx]
+            
+            # Pack sequences
+            packed_input = nn.utils.rnn.pack_padded_sequence(
+                X_sorted, sorted_lengths.tolist(), batch_first=True
+            )
+            
+            # Forward pass
+            _, (hidden, cell) = self.model[0](packed_input)
+            predictions_scaled = self.output_layer(hidden[-1])
+            
+            # Unsort predictions
+            unsort_idx = sort_idx.argsort()
+            predictions_scaled = predictions_scaled[unsort_idx]
             predictions_scaled = predictions_scaled.cpu().numpy()
         
         # Denormalize
@@ -387,7 +436,7 @@ class GRUForecaster(BaseForecaster):
         
         self.output_layer = nn.Linear(self.hidden_size, self.input_size).to(self.device)
     
-    def fit(self, X: np.ndarray, y: np.ndarray) -> 'GRUForecaster':
+    def fit(self, X: np.ndarray, y: np.ndarray, sequence_lengths: Optional[np.ndarray] = None) -> 'GRUForecaster':
         """Train the GRU model."""
         logger.info(f"Training GRU on device: {self.device}")
         
@@ -398,7 +447,7 @@ class GRUForecaster(BaseForecaster):
         y_scaled = self.scaler_y.fit_transform(y)
         
         # Dataset and dataloader
-        dataset = TimeSeriesDataset(X_scaled, y_scaled, seq_len)
+        dataset = TimeSeriesDataset(X_scaled, y_scaled, seq_len, sequence_lengths)
         dataloader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
         
         # Loss and optimizer
@@ -413,13 +462,28 @@ class GRUForecaster(BaseForecaster):
         for epoch in range(self.epochs):
             total_loss = 0.0
             
-            for batch_X, batch_y in dataloader:
+            for batch_X, batch_y, batch_lengths in dataloader:
                 batch_X = batch_X.to(self.device)
                 batch_y = batch_y.to(self.device)
+                batch_lengths = batch_lengths.cpu()
+                
+                # Sort by length for pack_padded_sequence
+                sorted_lengths, sort_idx = batch_lengths.sort(descending=True)
+                batch_X_sorted = batch_X[sort_idx]
+                batch_y_sorted = batch_y[sort_idx]
+                
+                # Pack sequences
+                packed_input = nn.utils.rnn.pack_padded_sequence(
+                    batch_X_sorted, sorted_lengths.tolist(), batch_first=True
+                )
                 
                 # Forward
-                gru_out, hidden = self.gru(batch_X)
-                predictions = self.output_layer(gru_out[:, -1, :])
+                _, hidden = self.gru(packed_input)
+                predictions = self.output_layer(hidden[-1])
+                
+                # Unsort predictions
+                unsort_idx = sort_idx.argsort()
+                predictions = predictions[unsort_idx]
                 
                 # Loss
                 loss = criterion(predictions, batch_y)
@@ -440,7 +504,7 @@ class GRUForecaster(BaseForecaster):
         logger.info("GRU training complete")
         return self
     
-    def predict(self, X: np.ndarray) -> np.ndarray:
+    def predict(self, X: np.ndarray, sequence_lengths: Optional[np.ndarray] = None) -> np.ndarray:
         """Make predictions."""
         if not self.is_fitted:
             raise RuntimeError("Model must be fitted before prediction")
@@ -450,12 +514,32 @@ class GRUForecaster(BaseForecaster):
         X_reshaped = X.reshape(-1, n_features)
         X_scaled = self.scaler_X.transform(X_reshaped).reshape(n_samples, seq_len, n_features)
         
+        # Default to full length if not provided
+        if sequence_lengths is None:
+            sequence_lengths = np.array([seq_len] * n_samples)
+        
         # Predict
         self.gru.eval()
         with torch.no_grad():
             X_tensor = torch.FloatTensor(X_scaled).to(self.device)
-            gru_out, _ = self.gru(X_tensor)
-            predictions_scaled = self.output_layer(gru_out[:, -1, :])
+            lengths_tensor = torch.LongTensor(sequence_lengths)
+            
+            # Sort by length
+            sorted_lengths, sort_idx = lengths_tensor.sort(descending=True)
+            X_sorted = X_tensor[sort_idx]
+            
+            # Pack sequences
+            packed_input = nn.utils.rnn.pack_padded_sequence(
+                X_sorted, sorted_lengths.tolist(), batch_first=True
+            )
+            
+            # Forward pass
+            _, hidden = self.gru(packed_input)
+            predictions_scaled = self.output_layer(hidden[-1])
+            
+            # Unsort predictions
+            unsort_idx = sort_idx.argsort()
+            predictions_scaled = predictions_scaled[unsort_idx]
             predictions_scaled = predictions_scaled.cpu().numpy()
         
         # Denormalize

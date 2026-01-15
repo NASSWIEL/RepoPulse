@@ -4,6 +4,10 @@ FastAPI Inference Service for Repository Activity Prediction
 
 This service loads the best-performing model checkpoint and provides
 an interactive API for predicting repository activity status from time-series data.
+
+Note: Models are trained using an expanding-window approach (starting from 2 quarters)
+      but at inference time, the API accepts fixed-length inputs (typically 4 quarters).
+      The models handle variable-length sequences via padding during training.
 """
 
 import json
@@ -26,7 +30,7 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 class LSTMModel(nn.Module):
-    """LSTM model architecture matching the trained checkpoint."""
+    """LSTM model architecture with variable-length sequence support."""
     
     def __init__(self, input_size: int = 8, hidden_size: int = 64, num_layers: int = 2, dropout: float = 0.2):
         super().__init__()
@@ -42,15 +46,21 @@ class LSTMModel(nn.Module):
         )
         self.fc = nn.Linear(hidden_size, input_size)
     
-    def forward(self, x):
-        lstm_out, _ = self.lstm(x)
-        # Use last timestep output
-        predictions = self.fc(lstm_out[:, -1, :])
+    def forward(self, x, lengths=None):
+        if lengths is not None and lengths.min() < x.size(1):
+            packed_input = nn.utils.rnn.pack_padded_sequence(
+                x, lengths.cpu().tolist(), batch_first=True, enforce_sorted=False
+            )
+            _, (hidden, cell) = self.lstm(packed_input)
+            predictions = self.fc(hidden[-1])
+        else:
+            lstm_out, _ = self.lstm(x)
+            predictions = self.fc(lstm_out[:, -1, :])
         return predictions
 
 
 class GRUModel(nn.Module):
-    """GRU model architecture matching the trained checkpoint."""
+    """GRU model architecture with variable-length sequence support."""
     
     def __init__(self, input_size: int = 8, hidden_size: int = 64, num_layers: int = 2, dropout: float = 0.2):
         super().__init__()
@@ -66,10 +76,16 @@ class GRUModel(nn.Module):
         )
         self.fc = nn.Linear(hidden_size, input_size)
     
-    def forward(self, x):
-        gru_out, _ = self.gru(x)
-        # Use last timestep output
-        predictions = self.fc(gru_out[:, -1, :])
+    def forward(self, x, lengths=None):
+        if lengths is not None and lengths.min() < x.size(1):
+            packed_input = nn.utils.rnn.pack_padded_sequence(
+                x, lengths.cpu().tolist(), batch_first=True, enforce_sorted=False
+            )
+            _, hidden = self.gru(packed_input)
+            predictions = self.fc(hidden[-1])
+        else:
+            gru_out, _ = self.gru(x)
+            predictions = self.fc(gru_out[:, -1, :])
         return predictions
 
 
@@ -131,6 +147,11 @@ class ModelManager:
             'release_count',
             'fork_count'
         ]
+        
+        # Variable-length inference support
+        self.min_lookback = 2
+        self.max_lookback = None
+        self.trained_lookback = None
     
     def load_feature_stats(self, stats_path: str = 'data/processed/timeseries/feature_stats.json'):
         """Load normalization statistics from training."""
@@ -143,6 +164,19 @@ class ModelManager:
             self.feature_stats = json.load(f)
         
         logger.info(f"Loaded feature statistics from {stats_path}")
+        
+        # Load metadata to get lookback configuration
+        metadata_path = path.parent / "metadata.json"
+        if metadata_path.exists():
+            with open(metadata_path, 'r') as f:
+                metadata = json.load(f)
+                self.trained_lookback = metadata.get('lookback', 4)
+                self.min_lookback = metadata.get('min_lookback', 2)
+                self.max_lookback = metadata.get('max_lookback', None)
+                logger.info(f"Model trained with lookback={self.trained_lookback}, supports min={self.min_lookback}")
+        else:
+            self.trained_lookback = 4
+            logger.warning(f"Metadata not found, using default lookback={self.trained_lookback}")
     
     def normalize(self, data: np.ndarray) -> np.ndarray:
         """Apply z-score normalization using training statistics."""
@@ -189,8 +223,8 @@ class ModelManager:
         else:
             raise ValueError(f"Unknown model type: {model_type}")
         
-        # Load checkpoint
-        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        # Load checkpoint (weights_only=False for backward compatibility)
+        checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.model.to(self.device)
         self.model.eval()
@@ -203,11 +237,11 @@ class ModelManager:
     
     def predict(self, sequence: np.ndarray) -> Dict[str, Any]:
         """
-        Make prediction from time-series sequence.
+        Make prediction from time-series sequence (supports variable length).
         
         Args:
             sequence: Input sequence of shape (sequence_length, n_features)
-                     Expected: (4, 8) - 4 quarters, 8 metrics
+                     sequence_length must be >= min_lookback (typically 2)
         
         Returns:
             Dictionary with predictions and activity classification
@@ -215,19 +249,41 @@ class ModelManager:
         if self.model is None:
             raise RuntimeError("Model not loaded")
         
-        # Validate shape
-        if sequence.shape != (4, 8):
-            raise ValueError(f"Expected shape (4, 8), got {sequence.shape}")
+        seq_length, n_features = sequence.shape
+        
+        # Validate minimum requirements
+        if seq_length < self.min_lookback:
+            raise ValueError(
+                f"Sequence too short: got {seq_length} quarters, "
+                f"minimum required is {self.min_lookback}"
+            )
+        
+        if n_features != 8:
+            raise ValueError(f"Expected 8 features, got {n_features}")
+        
+        # Prepare sequence with padding/truncation if needed
+        actual_length = seq_length
+        if seq_length < self.trained_lookback:
+            pad_length = self.trained_lookback - seq_length
+            padded_sequence = np.vstack([np.zeros((pad_length, n_features)), sequence])
+            logger.info(f"Padded sequence from {seq_length} to {self.trained_lookback} quarters")
+        elif seq_length > self.trained_lookback:
+            padded_sequence = sequence[-self.trained_lookback:]
+            actual_length = self.trained_lookback
+            logger.info(f"Truncated sequence from {seq_length} to {self.trained_lookback} quarters")
+        else:
+            padded_sequence = sequence
         
         # Normalize input
-        sequence_normalized = self.normalize(sequence)
+        sequence_normalized = self.normalize(padded_sequence)
         
         # Convert to tensor
         sequence_tensor = torch.FloatTensor(sequence_normalized).unsqueeze(0).to(self.device)
+        lengths_tensor = torch.LongTensor([actual_length])
         
         # Inference
         with torch.no_grad():
-            predictions_normalized = self.model(sequence_tensor)
+            predictions_normalized = self.model(sequence_tensor, lengths_tensor)
             predictions = predictions_normalized.squeeze(0).cpu().numpy()
         
         # Denormalize predictions
@@ -248,6 +304,13 @@ class ModelManager:
             },
             'activity_score': activity_score,
             'activity_status': activity_status,
+            'sequence_info': {
+                'input_length': int(seq_length),
+                'actual_length_used': int(actual_length),
+                'padded': seq_length < self.trained_lookback,
+                'truncated': seq_length > self.trained_lookback,
+                'trained_lookback': int(self.trained_lookback)
+            },
             'confidence': {
                 'score_threshold': 1319.5,
                 'score_distance': abs(activity_score - 1319.5),
@@ -278,8 +341,13 @@ app = FastAPI(
     This API uses trained LSTM/GRU models to forecast repository metrics for the next quarter
     and classify the repository as **active** or **inactive**.
     
-    ### Input Format
-    Time-series sequence of **4 quarters** × **8 metrics**:
+    ### Input Format (Flexible Variable-Length)
+    Time-series sequence of **2+ quarters** × **8 metrics**:
+    - **Minimum**: 2 quarters required
+    - **Recommended**: 4+ quarters for best accuracy
+    - **Automatic handling**: Sequences padded/truncated as needed
+    
+    **Metrics per quarter** (in order):
     - `commit_count`: Number of commits
     - `contributor_count`: Number of unique contributors
     - `issue_count`: Number of issues opened
@@ -293,7 +361,11 @@ app = FastAPI(
     - Predicted metrics for next quarter
     - Activity score (weighted combination of metrics)
     - Activity status: **active** (score ≥ 1319.5) or **inactive** (score < 1319.5)
+    - Sequence info (length, padding applied)
     - Confidence indicators
+    
+    ### Training Strategy
+    Models trained with expanding-window approach for better generalization.
     
     ### Example
     Try the interactive Swagger UI below to submit sample data and view predictions!
@@ -313,7 +385,7 @@ class PredictionRequest(BaseModel):
     
     sequence: List[List[float]] = Field(
         ...,
-        description="Time-series sequence of shape (4, 8): 4 quarters × 8 metrics",
+        description="Time-series sequence of shape (n_quarters, 8) where n_quarters >= 2",
         example=[
             [120.0, 55.0, 80.0, 65.0, 85.0, 42.0, 5.0, 0.0],
             [140.0, 60.0, 90.0, 70.0, 95.0, 45.0, 6.0, 0.0],
@@ -325,13 +397,20 @@ class PredictionRequest(BaseModel):
     @field_validator('sequence')
     @classmethod
     def validate_sequence_shape(cls, v):
-        """Validate sequence dimensions."""
-        if len(v) != 4:
-            raise ValueError(f"Expected 4 quarters, got {len(v)}")
+        """Validate sequence dimensions (flexible length)."""
+        n_quarters = len(v)
+        
+        if n_quarters < 2:
+            raise ValueError(
+                f"Sequence too short: got {n_quarters} quarters, minimum required is 2"
+            )
         
         for i, quarter in enumerate(v):
             if len(quarter) != 8:
-                raise ValueError(f"Quarter {i} has {len(quarter)} metrics, expected 8")
+                raise ValueError(
+                    f"Quarter {i} has {len(quarter)} metrics, expected 8. "
+                    f"Each quarter must have 8 metrics in order."
+                )
         
         return v
 

@@ -1,0 +1,51 @@
+PROJECT SOURCE CODE FILES
+================================================================================
+
+CONFIGURATION
+--------------------------------------------------------------------------------
+config/config.yaml                          Central configuration for data paths, model hyperparameters, and MLflow settings
+
+PREPROCESSING SCRIPTS
+--------------------------------------------------------------------------------
+preprocessing/aggregate_quarters_enhanced.py    Aggregates raw GitHub event logs into quarterly metrics with batch processing
+preprocessing/label_activity.py                 Computes weighted activity scores and generates binary active/inactive labels
+preprocessing/inspect_data.py                   Utility for inspecting and validating raw and processed data
+
+MODELS AND TRAINING
+--------------------------------------------------------------------------------
+models/forecaster.py                        Defines LSTM and GRU neural forecaster architectures with autoregressive prediction
+models/classifier.py                        Implements logistic regression and random forest activity classifiers
+models/prepare_timeseries_data.py           Converts labeled quarterly data into normalized time-series sequences
+models/train_forecasters.py                 Trains LSTM/GRU models with MLflow tracking and model registry integration
+models/train_forecaster.py                  Alternative training script for single forecaster models
+models/train_classifier.py                  Trains binary activity classifiers with MLflow experiment tracking
+models/evaluate_forecasters.py              Evaluates forecasters with autoregressive rollout and classification metrics
+models/mlflow_utils.py                      Helper functions for MLflow experiment tracking and model registration
+
+API SERVICE
+--------------------------------------------------------------------------------
+api_service.py                              FastAPI REST service for real-time repository activity predictions
+test_api_simple.py                          Basic test suite for API endpoints and prediction functionality
+
+SHELL SCRIPTS
+--------------------------------------------------------------------------------
+scripts/run_pipeline.sh                     Orchestrates full ML pipeline from data aggregation to model training
+start_api.sh                                Launches FastAPI service with uvicorn in production mode
+
+TESTS
+--------------------------------------------------------------------------------
+tests/test_preprocessing.py                 Unit tests for data aggregation and activity labeling functions
+tests/test_models.py                        Unit tests for forecaster and classifier model components
+
+UTILITIES
+--------------------------------------------------------------------------------
+USAGE_GUIDE.py                              Programmatic documentation and usage examples for the project
+
+PACKAGE INITIALIZATION
+--------------------------------------------------------------------------------
+preprocessing/__init__.py                   Package initialization for preprocessing module
+models/__init__.py                          Package initialization for models module
+
+DEPENDENCIES
+--------------------------------------------------------------------------------
+requirements.txt                            Python package dependencies for the entire project

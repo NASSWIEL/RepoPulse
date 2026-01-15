@@ -54,7 +54,7 @@ if torch.cuda.is_available():
 
 
 class TimeSeriesDataset(Dataset):
-    """PyTorch dataset for time-series sequences."""
+    """PyTorch dataset for time-series sequences with variable-length support."""
     
     def __init__(self, data_path: Path, normalize: bool = True, stats_path: Path = None):
         """Load and optionally normalize data."""
@@ -64,6 +64,15 @@ class TimeSeriesDataset(Dataset):
         self.target_metrics = data['target_metrics']
         self.target_labels = data['target_labels']
         self.target_scores = data['target_scores']
+        
+        # Load sequence lengths if available (for expanding-window)
+        if 'sequence_lengths' in data:
+            self.sequence_lengths = data['sequence_lengths']
+            logger.info(f"Loaded variable-length sequences (min={self.sequence_lengths.min()}, max={self.sequence_lengths.max()})")
+        else:
+            # All sequences have full length
+            self.sequence_lengths = np.array([self.lookback_features.shape[1]] * len(self.lookback_features))
+            logger.info(f"Loaded fixed-length sequences (length={self.sequence_lengths[0]})")
         
         # Normalization
         if normalize and stats_path and stats_path.exists():
@@ -131,7 +140,8 @@ class TimeSeriesDataset(Dataset):
             'lookback': torch.FloatTensor(self.lookback_features[idx]),
             'target': torch.FloatTensor(self.target_metrics[idx]),
             'label': torch.LongTensor([self.target_labels[idx]]),
-            'score': torch.FloatTensor([self.target_scores[idx]])
+            'score': torch.FloatTensor([self.target_scores[idx]]),
+            'length': torch.LongTensor([self.sequence_lengths[idx]])
         }
 
 
@@ -155,19 +165,30 @@ class LSTMForecaster(nn.Module):
         
         self.fc = nn.Linear(hidden_size, n_features)
         
-    def forward(self, x):
+    def forward(self, x, lengths=None):
         """
-        Forward pass.
+        Forward pass with variable-length sequence support.
         
         Args:
             x: [batch, lookback, n_features]
+            lengths: [batch] - actual sequence lengths (optional)
         
         Returns:
             [batch, 1, n_features] - next quarter prediction
         """
-        lstm_out, _ = self.lstm(x)
-        # Take last timestep
-        last_output = lstm_out[:, -1, :]
+        if lengths is not None:
+            # Pack padded sequence
+            packed_input = nn.utils.rnn.pack_padded_sequence(
+                x, lengths.cpu().tolist(), batch_first=True, enforce_sorted=False
+            )
+            packed_output, (hidden, cell) = self.lstm(packed_input)
+            # Use last hidden state
+            last_output = hidden[-1]  # [batch, hidden_size]
+        else:
+            # Regular processing
+            lstm_out, _ = self.lstm(x)
+            last_output = lstm_out[:, -1, :]
+        
         prediction = self.fc(last_output)
         return prediction.unsqueeze(1)
 
@@ -192,10 +213,21 @@ class GRUForecaster(nn.Module):
         
         self.fc = nn.Linear(hidden_size, n_features)
         
-    def forward(self, x):
-        """Forward pass."""
-        gru_out, _ = self.gru(x)
-        last_output = gru_out[:, -1, :]
+    def forward(self, x, lengths=None):
+        """Forward pass with variable-length sequence support."""
+        if lengths is not None:
+            # Pack padded sequence
+            packed_input = nn.utils.rnn.pack_padded_sequence(
+                x, lengths.cpu().tolist(), batch_first=True, enforce_sorted=False
+            )
+            packed_output, hidden = self.gru(packed_input)
+            # Use last hidden state
+            last_output = hidden[-1]  # [batch, hidden_size]
+        else:
+            # Regular processing
+            gru_out, _ = self.gru(x)
+            last_output = gru_out[:, -1, :]
+        
         prediction = self.fc(last_output)
         return prediction.unsqueeze(1)
 
@@ -278,6 +310,7 @@ def train_model(
         for batch_idx, batch in enumerate(train_loader):
             lookback = batch['lookback'].to(device)
             target = batch['target'].to(device)
+            lengths = batch['length'].squeeze(-1)  # [batch]
             
             # Check for NaN in batch data
             if torch.isnan(lookback).any():
@@ -288,7 +321,7 @@ def train_model(
                 raise ValueError(f"NaN in training target {batch_idx}")
             
             optimizer.zero_grad()
-            prediction = model(lookback)
+            prediction = model(lookback, lengths)
             
             # Check for NaN in prediction
             if torch.isnan(prediction).any():
@@ -322,8 +355,9 @@ def train_model(
             for batch in dev_loader:
                 lookback = batch['lookback'].to(device)
                 target = batch['target'].to(device)
+                lengths = batch['length'].squeeze(-1)
                 
-                prediction = model(lookback)
+                prediction = model(lookback, lengths)
                 loss = criterion(prediction, target)
                 dev_losses.append(loss.item())
         

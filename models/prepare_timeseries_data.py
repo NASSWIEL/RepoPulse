@@ -50,19 +50,38 @@ class TimeSeriesDataPreparator:
     def __init__(
         self,
         config_path: str = "config/config.yaml",
-        lookback: int = 4,
-        horizon: int = 1
+        lookback: int = None,
+        horizon: int = 1,
+        expanding_window: bool = None
     ):
         """
         Initialize data preparator.
         
         Args:
             config_path: Path to config file
-            lookback: Number of past quarters to use as features
+            lookback: Number of past quarters (overrides config if provided)
             horizon: Number of future quarters to predict
+            expanding_window: Use expanding window approach (overrides config if provided)
         """
         self.config = self._load_config(config_path)
-        self.lookback = lookback
+        
+        # Get preprocessing config
+        preproc_config = self.config.get("preprocessing", {})
+        
+        # Set expanding window mode
+        self.expanding_window = expanding_window if expanding_window is not None else preproc_config.get("expanding_window", False)
+        
+        # Set lookback parameters
+        if self.expanding_window:
+            self.min_lookback = preproc_config.get("min_lookback", 2)
+            self.max_lookback = preproc_config.get("max_lookback", None)
+            self.lookback = self.min_lookback  # Starting point for expanding windows
+        else:
+            # Fixed-length mode (backward compatibility)
+            self.lookback = lookback if lookback is not None else preproc_config.get("sequence_length", 4)
+            self.min_lookback = self.lookback
+            self.max_lookback = self.lookback
+        
         self.horizon = horizon
         self.input_path = Path(self.config["data"]["labeled_data_path"])
         self.output_dir = Path(self.config["data"]["output_path"]) / "timeseries"
@@ -78,7 +97,15 @@ class TimeSeriesDataPreparator:
         logger.info("="*70)
         logger.info("TIME-SERIES DATA PREPARATION")
         logger.info("="*70)
-        logger.info(f"Lookback window: {self.lookback} quarters")
+        
+        if self.expanding_window:
+            logger.info(f"Training mode: EXPANDING WINDOW")
+            logger.info(f"  Min lookback: {self.min_lookback} quarters")
+            logger.info(f"  Max lookback: {self.max_lookback or 'unlimited'}")
+        else:
+            logger.info(f"Training mode: FIXED WINDOW")
+            logger.info(f"  Lookback window: {self.lookback} quarters")
+        
         logger.info(f"Forecast horizon: {self.horizon} quarter(s)")
         
         # Load data
@@ -218,54 +245,111 @@ class TimeSeriesDataPreparator:
     
     def _create_sequences(self, data: pd.DataFrame) -> List[Dict]:
         """
-        Create sequences with lagged features.
+        Create sequences with expanding-window approach.
+        
+        If expanding_window=True:
+          - Use quarters [0, 1] to predict quarter 2
+          - Use quarters [0, 1, 2] to predict quarter 3
+          - Use quarters [0, 1, 2, 3] to predict quarter 4, etc.
+        
+        If expanding_window=False:
+          - Use fixed-length sliding windows (backward compatibility)
         
         Each sequence contains:
-        - lookback_features: [lookback, n_features] past quarters
+        - lookback_features: [lookback_length, n_features] past quarters (variable length if expanding)
         - target_metrics: [horizon, n_features] future metrics to predict
         - target_label: binary activity label for forecast quarter
-        - metadata: repo_id, year, quarter, etc.
+        - metadata: repo_id, year, quarter, actual_lookback, etc.
         """
         sequences = []
         
         # Group by repository
         for repo_id, repo_data in data.groupby('repo_id'):
             repo_data = repo_data.sort_values(['year', 'quarter']).reset_index(drop=True)
+            n_quarters = len(repo_data)
             
-            # Need at least lookback + horizon quarters
-            if len(repo_data) < self.lookback + self.horizon:
+            # Need at least min_lookback + horizon quarters
+            if n_quarters < self.min_lookback + self.horizon:
                 continue
             
-            # Sliding window
-            for i in range(len(repo_data) - self.lookback - self.horizon + 1):
-                # Lookback window
-                lookback_data = repo_data.iloc[i:i+self.lookback]
-                
-                # Target window
-                target_data = repo_data.iloc[i+self.lookback:i+self.lookback+self.horizon]
-                
-                # Extract features
-                lookback_features = lookback_data[self.FORECAST_FEATURES].values
-                target_metrics = target_data[self.FORECAST_FEATURES].values
-                target_label = target_data['is_active'].values[0]  # First quarter in horizon
-                target_score = target_data['activity_score'].values[0]
-                
-                # Metadata
-                target_quarter = target_data.iloc[0]
-                
-                sequence = {
-                    'repo_id': repo_id,
-                    'target_year': int(target_quarter['year']),
-                    'target_quarter': int(target_quarter['quarter']),
-                    'target_quarter_index': int(target_quarter['quarter_index']),
-                    'lookback_features': lookback_features.astype(np.float32),
-                    'target_metrics': target_metrics.astype(np.float32),
-                    'target_label': int(target_label),
-                    'target_score': float(target_score),
-                    'quarters_since_start': int(target_quarter['quarters_since_start'])
-                }
-                
-                sequences.append(sequence)
+            if self.expanding_window:
+                # Expanding window: start with min_lookback, expand to max available
+                for target_idx in range(self.min_lookback, n_quarters):
+                    # Use all history up to target_idx as lookback
+                    lookback_start = 0
+                    lookback_end = target_idx
+                    
+                    # Apply max_lookback limit if specified
+                    if self.max_lookback is not None:
+                        lookback_start = max(0, target_idx - self.max_lookback)
+                    
+                    actual_lookback = lookback_end - lookback_start
+                    
+                    # Check if we have enough data for the target horizon
+                    if target_idx + self.horizon > n_quarters:
+                        break
+                    
+                    # Lookback window
+                    lookback_data = repo_data.iloc[lookback_start:lookback_end]
+                    
+                    # Target window
+                    target_data = repo_data.iloc[target_idx:target_idx+self.horizon]
+                    
+                    # Extract features
+                    lookback_features = lookback_data[self.FORECAST_FEATURES].values
+                    target_metrics = target_data[self.FORECAST_FEATURES].values
+                    target_label = target_data['is_active'].values[0]
+                    target_score = target_data['activity_score'].values[0]
+                    
+                    # Metadata
+                    target_quarter = target_data.iloc[0]
+                    
+                    sequence = {
+                        'repo_id': repo_id,
+                        'target_year': int(target_quarter['year']),
+                        'target_quarter': int(target_quarter['quarter']),
+                        'target_quarter_index': int(target_quarter['quarter_index']),
+                        'lookback_features': lookback_features.astype(np.float32),
+                        'target_metrics': target_metrics.astype(np.float32),
+                        'target_label': int(target_label),
+                        'target_score': float(target_score),
+                        'quarters_since_start': int(target_quarter['quarters_since_start']),
+                        'actual_lookback': actual_lookback  # Store actual lookback length
+                    }
+                    
+                    sequences.append(sequence)
+            else:
+                # Fixed-length sliding window (backward compatibility)
+                for i in range(n_quarters - self.lookback - self.horizon + 1):
+                    # Lookback window
+                    lookback_data = repo_data.iloc[i:i+self.lookback]
+                    
+                    # Target window
+                    target_data = repo_data.iloc[i+self.lookback:i+self.lookback+self.horizon]
+                    
+                    # Extract features
+                    lookback_features = lookback_data[self.FORECAST_FEATURES].values
+                    target_metrics = target_data[self.FORECAST_FEATURES].values
+                    target_label = target_data['is_active'].values[0]
+                    target_score = target_data['activity_score'].values[0]
+                    
+                    # Metadata
+                    target_quarter = target_data.iloc[0]
+                    
+                    sequence = {
+                        'repo_id': repo_id,
+                        'target_year': int(target_quarter['year']),
+                        'target_quarter': int(target_quarter['quarter']),
+                        'target_quarter_index': int(target_quarter['quarter_index']),
+                        'lookback_features': lookback_features.astype(np.float32),
+                        'target_metrics': target_metrics.astype(np.float32),
+                        'target_label': int(target_label),
+                        'target_score': float(target_score),
+                        'quarters_since_start': int(target_quarter['quarters_since_start']),
+                        'actual_lookback': self.lookback
+                    }
+                    
+                    sequences.append(sequence)
         
         return sequences
     
@@ -311,17 +395,43 @@ class TimeSeriesDataPreparator:
         test: List[Dict],
         original_data: pd.DataFrame
     ) -> None:
-        """Save prepared data splits."""
+        """Save prepared data splits with padding for variable-length sequences."""
+        
+        # Determine max sequence length for padding
+        if self.expanding_window:
+            all_sequences = train + dev + test
+            max_lookback = max(s['actual_lookback'] for s in all_sequences)
+            logger.info(f"\nVariable-length sequences detected:")
+            logger.info(f"  Min lookback: {min(s['actual_lookback'] for s in all_sequences)}")
+            logger.info(f"  Max lookback: {max_lookback}")
+            logger.info(f"  Padding to: {max_lookback} quarters")
+        else:
+            max_lookback = self.lookback
         
         # Save sequences as numpy arrays for efficiency
         for split_name, split_data in [('train', train), ('dev', dev), ('test', test)]:
-            # Convert to structured format
             n_samples = len(split_data)
+            n_features = len(self.FORECAST_FEATURES)
+            
+            # Pre-allocate padded arrays
+            padded_lookback = np.zeros((n_samples, max_lookback, n_features), dtype=np.float32)
+            sequence_lengths = np.zeros(n_samples, dtype=np.int32)
+            
+            # Fill arrays with padding (zeros at the beginning for shorter sequences)
+            for i, seq in enumerate(split_data):
+                lookback_features = seq['lookback_features']
+                actual_len = seq['actual_lookback']
+                sequence_lengths[i] = actual_len
+                
+                # Pad at the beginning (left padding) - more recent data at the end
+                pad_length = max_lookback - actual_len
+                padded_lookback[i, pad_length:, :] = lookback_features
             
             # Save as npz (compressed numpy format)
             np.savez_compressed(
                 self.output_dir / f'{split_name}.npz',
-                lookback_features=np.array([s['lookback_features'] for s in split_data]),
+                lookback_features=padded_lookback,
+                sequence_lengths=sequence_lengths,  # Store actual lengths for masking
                 target_metrics=np.array([s['target_metrics'] for s in split_data]),
                 target_labels=np.array([s['target_label'] for s in split_data]),
                 target_scores=np.array([s['target_score'] for s in split_data]),
@@ -330,11 +440,14 @@ class TimeSeriesDataPreparator:
                 target_quarters=np.array([s['target_quarter'] for s in split_data])
             )
             
-            logger.info(f"Saved {split_name} split: {n_samples} sequences")
+            logger.info(f"Saved {split_name} split: {n_samples} sequences (padded to {max_lookback})")
         
         # Save metadata
         metadata = {
-            'lookback': self.lookback,
+            'lookback': max_lookback,  # Save max lookback for consistency
+            'min_lookback': self.min_lookback,
+            'max_lookback': self.max_lookback,
+            'expanding_window': self.expanding_window,
             'horizon': self.horizon,
             'n_features': len(self.FORECAST_FEATURES),
             'feature_names': self.FORECAST_FEATURES,
@@ -459,8 +572,8 @@ def main():
     parser.add_argument(
         '--lookback',
         type=int,
-        default=4,
-        help='Number of past quarters to use as features'
+        default=None,
+        help='Number of past quarters (overrides config, only for fixed-window mode)'
     )
     parser.add_argument(
         '--horizon',
@@ -468,14 +581,32 @@ def main():
         default=1,
         help='Number of future quarters to predict'
     )
+    parser.add_argument(
+        '--expanding-window',
+        action='store_true',
+        help='Use expanding-window training approach (overrides config)'
+    )
+    parser.add_argument(
+        '--fixed-window',
+        action='store_true',
+        help='Use fixed-window training approach (overrides config)'
+    )
     
     args = parser.parse_args()
+    
+    # Determine expanding_window setting
+    expanding_window = None
+    if args.expanding_window:
+        expanding_window = True
+    elif args.fixed_window:
+        expanding_window = False
     
     # Prepare data
     preparator = TimeSeriesDataPreparator(
         config_path=args.config,
         lookback=args.lookback,
-        horizon=args.horizon
+        horizon=args.horizon,
+        expanding_window=expanding_window
     )
     preparator.prepare()
     

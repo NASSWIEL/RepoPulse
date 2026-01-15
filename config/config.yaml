@@ -10,7 +10,10 @@ data:
 
 # Preprocessing
 preprocessing:
-  sequence_length: 4  # Number of past quarters to use
+  # Expanding-window training: Use all available history (starting from min_lookback)
+  expanding_window: true  # If true, use progressive expanding windows; if false, use fixed lookback
+  min_lookback: 2  # Minimum historical quarters required (used as starting window)
+  max_lookback: null  # Maximum lookback (null = no limit, use all available history)
   imputation_strategy: "zero"  # zero, forward_fill, interpolate
   min_quarters: 2  # Minimum quarters required per repository
   date_range:
