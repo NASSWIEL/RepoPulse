@@ -257,6 +257,66 @@ For each training run, MLflow captures:
 - Artifacts: Trained model pickle, metrics JSON, sklearn model with signature
 - Dataset: Sample counts, class distribution, imbalance ratio
 
+## 🚀 Inference API Service
+
+### FastAPI Service for Repository Activity Prediction
+
+The project includes a clean FastAPI service that loads the best model checkpoint and provides interactive prediction capabilities.
+
+**Quick Start:**
+```bash
+# 1. Install FastAPI dependencies
+pip install fastapi uvicorn pydantic
+
+# 2. Start the API server
+uvicorn api_service:app --reload
+
+# 3. Access interactive documentation
+open http://localhost:8000/docs
+```
+
+**Test the API:**
+```bash
+# Run automated tests
+python test_api_simple.py
+
+# Or use curl
+curl -X POST http://localhost:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sequence": [
+      [120, 55, 80, 65, 85, 42, 5, 0],
+      [140, 60, 90, 70, 95, 45, 6, 0],
+      [130, 58, 85, 68, 90, 44, 5, 0],
+      [150, 62, 95, 75, 100, 48, 7, 0]
+    ]
+  }'
+```
+
+### API Endpoints
+
+- **POST /predict** - Predict repository activity status from time-series
+- **GET /health** - Check API health and model status  
+- **GET /model/info** - Get model architecture details
+- **GET /docs** - Interactive Swagger UI documentation
+
+### Features
+
+✅ Loads best-performing model checkpoint (GRU) at startup  
+✅ Automatic feature normalization using training statistics  
+✅ Activity classification (active/inactive) with confidence scores  
+✅ Input validation for correct time-series shape (4 quarters × 8 features)  
+✅ Interactive Swagger UI for testing  
+✅ Clear, documented API responses  
+
+### How It Works
+
+1. **Input**: 4 quarters of historical metrics (8 features per quarter)
+2. **Processing**: Model forecasts metrics for next quarter
+3. **Scoring**: Computes activity score using weighted metrics
+4. **Classification**: Classifies as active/inactive (threshold: 1319.5)
+5. **Output**: Predicted metrics + activity status + confidence
+
 ## License
 
 MIT
