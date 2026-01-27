@@ -300,22 +300,8 @@ curl -X POST http://localhost:8000/predict \
 - **GET /model/info** - Get model architecture details
 - **GET /docs** - Interactive Swagger UI documentation
 
-### Features
 
-✅ Loads best-performing model checkpoint (GRU) at startup  
-✅ Automatic feature normalization using training statistics  
-✅ Activity classification (active/inactive) with confidence scores  
-✅ Input validation for correct time-series shape (4 quarters × 8 features)  
-✅ Interactive Swagger UI for testing  
-✅ Clear, documented API responses  
 
-### How It Works
-
-1. **Input**: 4 quarters of historical metrics (8 features per quarter)
-2. **Processing**: Model forecasts metrics for next quarter
-3. **Scoring**: Computes activity score using weighted metrics
-4. **Classification**: Classifies as active/inactive (threshold: 1319.5)
-5. **Output**: Predicted metrics + activity status + confidence
 
 ## License
 
