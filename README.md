@@ -51,7 +51,7 @@ activity_score = commit_count × 1.0
                + fork_count × 0.3
 ```
 
-The weights encode several assumptions: contributors indicate sustained community (weight 2.0), merged PRs represent quality contributions (1.5), stars reflect popularity (0.2), and forks indicate active adoption and reuse (0.3). We compute the 75th percentile threshold across all quarters (1,319.5) and label quarters above this as "active" (1) and below as "inactive" (0). This yields a 22.4% active rate, creating moderate class imbalance.
+
 
 ### Preprocessing Pipeline
 
